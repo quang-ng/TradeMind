@@ -75,3 +75,24 @@ class AccountSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     starting_equity_usdt: Decimal = Decimal("10000")
+
+
+class FreqtradeSettings(BaseSettings):
+    """FREQTRADE_API_URL / _USER / _PASS (PROJECT.md Section 6) — internal-
+    network-only Freqtrade REST credentials, consumed by risk_engine only."""
+
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+
+    freqtrade_api_url: str = "http://localhost:8080"
+    freqtrade_api_user: str = ""
+    freqtrade_api_pass: str = ""
+    freqtrade_request_timeout_seconds: float = 15.0
+
+
+class WebhookSettings(BaseSettings):
+    """WEBHOOK_SHARED_SECRET (PROJECT.md Section 6) — authenticates the
+    Freqtrade -> admin_api webhook (Section 11), not the operator API key."""
+
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+
+    webhook_shared_secret: str = ""

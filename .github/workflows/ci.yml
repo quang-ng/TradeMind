@@ -8,6 +8,20 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: trademind
+          POSTGRES_PASSWORD: trademind
+          POSTGRES_DB: trademind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trademind"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +35,9 @@ jobs:
 
       - name: Lint
         run: uv run ruff check .
+
+      - name: Migrate
+        run: uv run alembic upgrade head
 
       - name: Test
         run: uv run pytest

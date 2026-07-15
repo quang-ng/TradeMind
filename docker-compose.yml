@@ -14,6 +14,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - core_net
 
   redis:
     image: redis:7-alpine
@@ -26,6 +28,72 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - core_net
+
+  # Isolated Zone (PROJECT.md Section 3): no exchange credentials, no route
+  # to freqtrade or risk_engine — enforced here by network segmentation,
+  # not just convention. Only ever calls out to the LLM provider's API.
+  llm_service:
+    build:
+      context: .
+      dockerfile: services/llm_service/Dockerfile
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+    ports:
+      - "8001:8000"
+    networks:
+      - llm_net
+
+  # Core Trading Zone (PROJECT.md Section 3): holds exchange config, sole
+  # path to execution. Never on llm_net.
+  freqtrade:
+    build:
+      context: .
+      dockerfile: freqtrade/Dockerfile
+    environment:
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      FREQTRADE_API_USER: ${FREQTRADE_API_USER:-}
+      FREQTRADE_API_PASS: ${FREQTRADE_API_PASS:-}
+      FREQTRADE_JWT_SECRET: ${FREQTRADE_JWT_SECRET:-}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://admin_api:8000/webhooks/freqtrade}
+      WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - core_net
+
+  risk_engine:
+    build:
+      context: .
+      dockerfile: services/risk_engine/Dockerfile
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
+      REDIS_URL: redis://redis:6379/0
+      FREQTRADE_API_URL: http://freqtrade:8080
+      FREQTRADE_API_USER: ${FREQTRADE_API_USER:-}
+      FREQTRADE_API_PASS: ${FREQTRADE_API_PASS:-}
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
+      DRY_RUN: ${DRY_RUN:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      freqtrade:
+        condition: service_healthy
+    networks:
+      - core_net
 
   admin_api:
     build:
@@ -34,6 +102,8 @@ services:
     environment:
       POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
       REDIS_URL: redis://redis:6379/0
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -41,6 +111,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - core_net
+
+networks:
+  core_net:
+  llm_net:
 
 volumes:
   postgres_data:

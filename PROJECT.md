@@ -296,7 +296,10 @@ trademind/
 │   ├── user_data/
 │   │   ├── strategies/
 │   │   │   └── ExternalSignalStrategy.py   # no autonomous entries; stoploss/ROI safety net only
-│   │   └── config.json
+│   │   └── config.json.tpl     # rendered to config.json at container start (docker-entrypoint.sh)
+│   │                           # — secrets (WEBHOOK_SHARED_SECRET, FREQTRADE_API_USER/PASS,
+│   │                           # FREQTRADE_JWT_SECRET) are env vars, never baked into the image
+│   ├── docker-entrypoint.sh
 │   └── Dockerfile
 ├── scripts/
 │   └── seed_dev_data.py
@@ -399,7 +402,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 |---|---|---|
 | `id` | UUID, PK | |
 | `trace_id` | UUID | |
-| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED` |
+| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `POSITION_OPENED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED` |
 | `payload` | jsonb | Event-specific detail |
 | `created_at` | timestamptz | |
 
@@ -606,6 +609,20 @@ Defaults live in a single versioned config object, editable only via `PATCH /con
 
 Rules are evaluated in the listed order; the **first** failing rule determines `rejection_reason` (rules are short-circuited — a stale signal that also has low confidence is reported as `STALE_SIGNAL`, not both).
 
+### 9.1.1 Exit evaluation (`SELL` signals)
+
+Section 9.1's rule table governs entries (`action = BUY`, or `action = HOLD` which never proceeds past rule 3). The system is long-only (Section 2.2), so a `SELL` signal is not a second kind of entry — it is a request to close an existing open position, evaluated by a separate, deliberately lighter pipeline (`risk_engine/app/exit_evaluator.py`) rather than Section 9.1's rule set:
+
+| Check | Behavior when violated |
+|---|---|
+| Duplicate signal (same as rule 2) | Reject with `DUPLICATE_SIGNAL` |
+| Signal staleness (same as rule 4) | Reject with `STALE_SIGNAL` |
+| Open position exists for this symbol | If none, reject with `NO_POSITION_TO_EXIT` — a `SELL` with nothing to close is a no-op, not a rejection of a real opportunity |
+
+On approval, the Risk Engine calls Freqtrade's `forceexit` (not `forceenter`) against the open position's Freqtrade trade ID.
+
+Deliberately **not** checked: the kill switch and minimum confidence. The kill switch halts new *entries* (Section 11/13: "blocks every subsequent entry") — it must never block getting *out* of risk. Minimum confidence exists to gate new exposure; exits reduce risk, so the bias here is toward allowing them, not gating them the way Section 9.1 gates new positions.
+
 ### 9.2 Position sizing
 
 Fixed-fractional risk sizing, using ATR for stop distance:
@@ -629,9 +646,11 @@ All monetary and sizing arithmetic uses fixed-point/`Decimal` types — never fl
 
 Take-profit for the MVP is **not** computed per-trade by the Risk Engine; it is enforced by Freqtrade's static `minimal_roi` table (configured in `freqtrade/user_data/config.json`) as a simple, auditable safety net. Per-trade computed take-profit/reward-risk ratios are a candidate for a later phase, not MVP (Section 2.2).
 
+**Stop-loss is enforced the same way, for a stricter reason than take-profit's simplicity preference:** Freqtrade's `forceenter` API has no field for a per-trade custom stop-loss — only a strategy-wide static `stoploss` class attribute (`freqtrade/user_data/strategies/ExternalSignalStrategy.py`, set to `-max_stop_loss_pct`, the conservative upper bound). The per-trade, tighter ATR-based `stop_loss_price` this section computes is still persisted to `RiskDecision.stop_loss_price` for audit — rule 12's invariant ("every approved entry carries a stop") is satisfied by the static strategy stoploss, not by that persisted value being mechanically pushed into Freqtrade. Wiring a true per-trade dynamic stop (e.g. via Freqtrade's `custom_stoploss()` callback reading `RiskDecision` from Postgres) is a candidate for a later phase, not MVP.
+
 ### 9.3 Rejection reasons (enum)
 
-`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`
+`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`, `INTERNAL_ERROR` (Section 9.4's unhandled-exception fallback), `NO_POSITION_TO_EXIT` (Section 9.1.1)
 
 ### 9.4 Failure Modes & Safe Defaults
 
@@ -707,6 +726,8 @@ Single-operator, self-hosted deployment: authentication is a static API key (`AD
 | `PATCH` | `/config` | Update risk parameters; writes `CONFIG_CHANGED` audit event | API key (Section 14: `dry_run` flips require extra confirmation) |
 | `POST` | `/cycles/{symbol}/trigger` | Manually trigger a cycle out-of-band (debugging), subject to all normal risk rules | API key |
 | `POST` | `/webhooks/freqtrade` | Internal: receives Freqtrade trade-event callbacks | Shared secret (`WEBHOOK_SHARED_SECRET`), not the operator API key |
+
+**`/webhooks/freqtrade` payload shape:** Freqtrade's webhook notifications default to `application/x-www-form-urlencoded` — `freqtrade/user_data/config.json.tpl`'s `webhook` block sets `"format": "json"` explicitly, which this endpoint requires. Handled events: `entry_fill` (→ `Order(FILLED)` + `Position(OPEN)`), `exit_fill` (→ `Order(FILLED)` + `Position(CLOSED)` with `pnl_usdt`/`pnl_pct`), `entry_cancel`/`exit_cancel` (→ `Order(CANCELLED)`). Plain `entry`/`exit` (submission acknowledgment, before fill) are received but produce no state change — the synchronous `forceenter`/`forceexit` response already recorded the `SUBMITTED` order.
 
 **Example — `GET /status`:**
 
