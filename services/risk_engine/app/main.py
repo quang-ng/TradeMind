@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import redis.asyncio as redis
-from common import redis_keys
+from common import kill_switch, redis_keys
 from common.config import AccountSettings, FreqtradeSettings, RedisSettings, RiskConfig
 from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
 from common.db.session import get_session_factory
@@ -18,11 +18,11 @@ from common.enums import (
     RejectionReason,
 )
 from common.logging import configure_json_logging
+from common.risk_config_store import load_effective_risk_config
 from redis.exceptions import ResponseError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from . import kill_switch
 from .account_state import load_account_state
 from .evaluator import RiskDecisionResult, evaluate
 from .exit_evaluator import ExitDecisionResult, evaluate_exit
@@ -372,7 +372,6 @@ async def _ensure_consumer_group(redis_client: redis.Redis) -> None:
 async def _handle_message(
     session_factory: async_sessionmaker[AsyncSession],
     redis_client: redis.Redis,
-    config: RiskConfig,
     account_settings: AccountSettings,
     freqtrade_client: FreqtradeClient,
     message_id: str,
@@ -387,6 +386,10 @@ async def _handle_message(
         return
     try:
         async with session_factory() as session:
+            # Loaded fresh per message (not once at startup) so a `PATCH
+            # /config` (PROJECT.md Section 11) takes effect on the next
+            # signal without a service restart.
+            config = await load_effective_risk_config(session)
             await process_signal(
                 session, redis_client, signal_id, config, account_settings, freqtrade_client
             )
@@ -404,7 +407,6 @@ async def _handle_message(
 
 
 async def run_consumer() -> None:
-    config = RiskConfig()
     account_settings = AccountSettings()
     session_factory = get_session_factory()
     # socket_timeout must exceed XREADGROUP's block= wait below, or the
@@ -430,7 +432,7 @@ async def run_consumer() -> None:
         for _, messages in response or []:
             for message_id, fields in messages:
                 await _handle_message(
-                    session_factory, redis_client, config, account_settings, freqtrade_client,
+                    session_factory, redis_client, account_settings, freqtrade_client,
                     message_id, fields,
                 )
 

@@ -45,3 +45,34 @@ async def enable(
     await session.flush()
 
     await redis_client.set(redis_keys.KILLSWITCH_GLOBAL_KEY, "1")
+
+
+async def disable(
+    session: AsyncSession,
+    redis_client: Redis,
+    *,
+    reason: str,
+    updated_by: str,
+    trace_id: uuid.UUID,
+) -> None:
+    """Mirror of `enable` (PROJECT.md Section 11 `POST /killswitch/disable`)
+    — same Postgres-first-then-Redis ordering."""
+    state = await session.get(SystemState, 1)
+    if state is None:
+        state = SystemState(id=1)
+        session.add(state)
+    state.killswitch_enabled = False
+    state.killswitch_reason = reason
+    state.killswitch_updated_by = updated_by
+    await session.flush()
+
+    session.add(
+        AuditEvent(
+            trace_id=trace_id,
+            event_type=AuditEventType.KILLSWITCH_DISABLED.value,
+            payload={"reason": reason, "updated_by": updated_by},
+        )
+    )
+    await session.flush()
+
+    await redis_client.set(redis_keys.KILLSWITCH_GLOBAL_KEY, "0")

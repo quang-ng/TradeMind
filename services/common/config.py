@@ -96,3 +96,29 @@ class WebhookSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     webhook_shared_secret: str = ""
+
+
+class AdminApiSettings(BaseSettings):
+    """ADMIN_API_KEY (PROJECT.md Section 6) — static bearer token auth for
+    every admin_api route except `/health` and `/webhooks/freqtrade`
+    (Section 11)."""
+
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+
+    admin_api_key: str = ""
+
+
+class NotifierSettings(BaseSettings):
+    """TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (PROJECT.md Section 6), plus
+    the admin_api endpoint the Telegram bot calls back into for kill-switch
+    slash commands — "Telegram is a client of the API, not a parallel
+    control path" (Section 11)."""
+
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    admin_api_url: str = "http://admin_api:8000"
+    admin_api_key: str = ""
+    audit_poll_interval_seconds: float = 3.0
+    telegram_poll_interval_seconds: float = 2.0

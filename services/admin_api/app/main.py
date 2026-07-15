@@ -6,6 +6,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .routers import audit, config, cycles, decisions, killswitch, orders, positions, signals
+from .routers import status as status_router
 from .routers import webhooks
 
 configure_json_logging()
@@ -13,6 +15,15 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TradeMind Admin API")
 app.include_router(webhooks.router)
+app.include_router(status_router.router)
+app.include_router(signals.router)
+app.include_router(decisions.router)
+app.include_router(positions.router)
+app.include_router(orders.router)
+app.include_router(audit.router)
+app.include_router(killswitch.router)
+app.include_router(config.router)
+app.include_router(cycles.router)
 
 
 @app.exception_handler(RequestValidationError)

@@ -133,3 +133,42 @@ class SystemState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class RiskConfigState(Base):
+    """PROJECT.md Section 7.7 — persisted overrides for `RiskConfig`
+    (Section 9.1), applied on top of the env-sourced defaults so
+    `PATCH /config` (Section 11) takes effect without a service restart.
+    Singleton row, id = 1, same pattern as `SystemState`."""
+
+    __tablename__ = "risk_config_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    overrides: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class NotifierState(Base):
+    """PROJECT.md Section 7.8 — singleton cursor state for the Telegram
+    Notifier (Section 6): how far into `audit_events` it has already
+    notified, and the Telegram `getUpdates` offset for slash-command
+    polling. Singleton row, id = 1.
+
+    `(last_audit_created_at, last_audit_id)` is a full-precision cursor over
+    `audit_events`, not just a timestamp — Postgres's `now()` is
+    transaction-time, so multiple audit rows written in the same commit
+    (e.g. `RISK_APPROVED` + `ORDER_SUBMITTED`) can share an identical
+    `created_at`; pairing it with the row's UUID gives a total order with no
+    new column needed on `audit_events`."""
+
+    __tablename__ = "notifier_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    last_audit_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_audit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    last_telegram_update_id: Mapped[int | None] = mapped_column(nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

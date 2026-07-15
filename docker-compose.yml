@@ -114,6 +114,28 @@ services:
     networks:
       - core_net
 
+  # Administration Zone (PROJECT.md Section 3): outbound-only to Telegram
+  # and admin_api; never touches Freqtrade/Binance credentials, and never
+  # writes kill-switch state itself — slash commands call back into
+  # admin_api's own endpoint (Section 11).
+  notifier:
+    build:
+      context: .
+      dockerfile: services/notifier/Dockerfile
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      ADMIN_API_URL: ${ADMIN_API_URL:-http://admin_api:8000}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      admin_api:
+        condition: service_started
+    networks:
+      - core_net
+
 networks:
   core_net:
   llm_net:
