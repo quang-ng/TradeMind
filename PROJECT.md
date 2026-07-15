@@ -341,6 +341,8 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `reasoning` | text | Truncated to 500 chars |
 | `model_name` | text | e.g. `provider:model-version` |
 | `raw_response` | jsonb | Full LLM response for audit/debugging |
+| `price` | numeric | Close price of `candle_ts`. Added in Phase 2: the Section 9.2 sizing formula needs the entry price that produced this signal, and this is the only place it survives past the LLM call |
+| `atr_14` | numeric | ATR(14) at `candle_ts`, same rationale as `price` — Section 9.2's stop-distance calculation is not derivable without it |
 | `status` | enum | `PENDING` \| `CONSUMED` \| `EXPIRED` |
 | `created_at` | timestamptz | |
 
