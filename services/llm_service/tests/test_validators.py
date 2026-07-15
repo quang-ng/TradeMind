@@ -1,7 +1,6 @@
 import json
 
 import pytest
-
 from common.enums import Action, SignalStatus
 from llm_service.app.schemas import AnalyzeRequest
 from llm_service.app.validators import (
@@ -54,7 +53,17 @@ def test_parse_llm_response_accepts_valid_output():
         ("not valid json {{{", "malformed_json"),
         ("[1, 2, 3]", "malformed_json"),
         ('"just a string"', "malformed_json"),
-        (json.dumps({"confidence": 0.5, "reasoning": "x", "key_indicators": [], "invalidation_condition": "x"}), "schema_invalid"),
+        (
+            json.dumps(
+                {
+                    "confidence": 0.5,
+                    "reasoning": "x",
+                    "key_indicators": [],
+                    "invalidation_condition": "x",
+                }
+            ),
+            "schema_invalid",
+        ),
         (
             json.dumps(
                 {
@@ -115,7 +124,9 @@ def test_parse_llm_response_rejects_invalid_output(raw_text, expected_reason):
 def test_build_hold_signal_produces_pending_hold_signal():
     request = _sample_request()
 
-    signal = build_hold_signal(request, reason="llm_timeout", model_name="anthropic:claude-sonnet-5")
+    signal = build_hold_signal(
+        request, reason="llm_timeout", model_name="anthropic:claude-sonnet-5"
+    )
 
     assert signal.action == Action.HOLD
     assert signal.confidence == 0.0
@@ -128,7 +139,12 @@ def test_build_signal_carries_through_llm_output():
     request = _sample_request()
     output = parse_llm_response(VALID_RESPONSE)
 
-    signal = build_signal(request, output, model_name="anthropic:claude-sonnet-5", raw_response={"raw": VALID_RESPONSE})
+    signal = build_signal(
+        request,
+        output,
+        model_name="anthropic:claude-sonnet-5",
+        raw_response={"raw": VALID_RESPONSE},
+    )
 
     assert signal.action == Action.SELL
     assert signal.confidence == 0.9

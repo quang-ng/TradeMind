@@ -1,6 +1,5 @@
 import pandas as pd
 import pytest
-
 from scheduler.app.indicators import atr, compute_indicators, ema, macd, rsi
 
 

@@ -1,0 +1,9 @@
+# Copy to docker-compose.override.yml for local development.
+# docker compose automatically merges docker-compose.override.yml on top of
+# docker-compose.yml; it is gitignored so each developer can customize it.
+services:
+  admin_api:
+    volumes:
+      - ./services/admin_api/app:/srv/app
+      - ./services/common:/srv/common
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

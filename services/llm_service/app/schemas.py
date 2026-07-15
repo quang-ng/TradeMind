@@ -1,15 +1,14 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
-
 from common.enums import Action, SignalStatus
+from pydantic import BaseModel, Field
 
 
 class Candle(BaseModel):
     t: str
     o: float
     h: float
-    l: float
+    l: float  # noqa: E741 -- wire field name fixed by PROJECT.md Section 8.1
     c: float
     v: float
 

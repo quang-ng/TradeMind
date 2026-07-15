@@ -1,10 +1,9 @@
 import asyncio
 import logging
 
-from fastapi import Depends, FastAPI
-
 from common.config import LLMServiceSettings
 from common.logging import configure_json_logging
+from fastapi import Depends, FastAPI
 
 from .prompts.v1 import SYSTEM_PROMPT_V1, build_user_prompt
 from .providers import get_provider
@@ -38,7 +37,9 @@ async def analyze(
     )
 
     if failure_reason is not None:
-        logger.warning("llm_call_failed", extra={"reason": failure_reason, "symbol": request.symbol})
+        logger.warning(
+            "llm_call_failed", extra={"reason": failure_reason, "symbol": request.symbol}
+        )
         return build_hold_signal(request, reason=failure_reason, model_name=model_name)
 
     try:

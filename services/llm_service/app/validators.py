@@ -1,8 +1,7 @@
 import json
 
-from pydantic import ValidationError
-
 from common.enums import Action
+from pydantic import ValidationError
 
 from .schemas import AnalyzeRequest, LLMOutput, Signal
 

@@ -2,11 +2,10 @@ import json
 from pathlib import Path
 
 import pytest
+from common.config import LLMServiceSettings
 from fastapi.testclient import TestClient
-
 from llm_service.app.main import app, get_provider_dependency, get_settings
 from llm_service.app.providers.base import Provider
-from common.config import LLMServiceSettings
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
