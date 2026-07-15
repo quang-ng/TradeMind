@@ -5,8 +5,6 @@ services:
       POSTGRES_USER: trademind
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trademind}
       POSTGRES_DB: trademind
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,11 +14,16 @@ services:
       retries: 5
     networks:
       - core_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -30,6 +33,24 @@ services:
       retries: 5
     networks:
       - core_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: migrations/Dockerfile
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - core_net
+    restart: "no"
 
   # Isolated Zone (PROJECT.md Section 3): no exchange credentials, no route
   # to freqtrade or risk_engine — enforced here by network segmentation,
@@ -43,9 +64,51 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - llm_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: services/scheduler/Dockerfile
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
+      REDIS_URL: redis://redis:6379/0
+      LLM_SERVICE_URL: http://llm_service:8000/analyze
+      CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      llm_service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - core_net
+      - llm_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   # Core Trading Zone (PROJECT.md Section 3): holds exchange config, sole
   # path to execution. Never on llm_net.
@@ -61,8 +124,9 @@ services:
       FREQTRADE_JWT_SECRET: ${FREQTRADE_JWT_SECRET:-}
       WEBHOOK_URL: ${WEBHOOK_URL:-http://admin_api:8000/webhooks/freqtrade}
       WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
+      DRY_RUN: ${DRY_RUN:-true}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/ping')"]
       interval: 10s
@@ -71,6 +135,11 @@ services:
       start_period: 20s
     networks:
       - core_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   risk_engine:
     build:
@@ -85,15 +154,28 @@ services:
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
       DRY_RUN: ${DRY_RUN:-true}
+      RECONCILIATION_INTERVAL_SECONDS: ${RECONCILIATION_INTERVAL_SECONDS:-60}
+      RECONCILIATION_ORDER_AGE_MINUTES: ${RECONCILIATION_ORDER_AGE_MINUTES:-10}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       freqtrade:
         condition: service_healthy
     networks:
       - core_net
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   admin_api:
     build:
@@ -104,15 +186,30 @@ services:
       REDIS_URL: redis://redis:6379/0
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
+      LLM_SERVICE_URL: http://llm_service:8000/analyze
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
+      llm_service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - core_net
+      - llm_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   # Administration Zone (PROJECT.md Section 3): outbound-only to Telegram
   # and admin_api; never touches Freqtrade/Binance credentials, and never
@@ -129,12 +226,23 @@ services:
       ADMIN_API_URL: ${ADMIN_API_URL:-http://admin_api:8000}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       admin_api:
-        condition: service_started
+        condition: service_healthy
     networks:
       - core_net
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 networks:
   core_net:

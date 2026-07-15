@@ -1,9 +1,11 @@
 from decimal import Decimal
 
 from common.enums import RejectionReason
-from factories import make_account, make_context
+
 from risk_engine.app.rules import insufficient_balance
 from risk_engine.app.sizing import SizingResult
+
+from .factories import make_account, make_context
 
 
 def test_passes_when_size_within_free_balance():

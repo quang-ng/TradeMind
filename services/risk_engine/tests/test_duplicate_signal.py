@@ -1,6 +1,8 @@
 from common.enums import RejectionReason
-from factories import make_context
+
 from risk_engine.app.rules import duplicate_signal
+
+from .factories import make_context
 
 
 def test_passes_when_not_a_duplicate():

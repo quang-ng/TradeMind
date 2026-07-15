@@ -24,7 +24,11 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
     config = await load_effective_risk_config(session)
 
     open_positions = (
-        (await session.execute(select(Position).where(Position.status == PositionStatus.OPEN.value)))
+        (
+            await session.execute(
+                select(Position).where(Position.status == PositionStatus.OPEN.value)
+            )
+        )
         .scalars()
         .all()
     )
@@ -32,7 +36,11 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
     equity_usdt = AccountSettings().starting_equity_usdt
     today = datetime.now(timezone.utc).date()
     closed_positions = (
-        (await session.execute(select(Position).where(Position.status == PositionStatus.CLOSED.value)))
+        (
+            await session.execute(
+                select(Position).where(Position.status == PositionStatus.CLOSED.value)
+            )
+        )
         .scalars()
         .all()
     )

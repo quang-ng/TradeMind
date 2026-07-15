@@ -6,9 +6,18 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .routers import audit, config, cycles, decisions, killswitch, orders, positions, signals
+from .routers import (
+    audit,
+    config,
+    cycles,
+    decisions,
+    killswitch,
+    orders,
+    positions,
+    signals,
+    webhooks,
+)
 from .routers import status as status_router
-from .routers import webhooks
 
 configure_json_logging()
 logger = logging.getLogger(__name__)

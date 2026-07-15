@@ -1,8 +1,10 @@
 from datetime import timedelta
 
 from common.enums import RejectionReason
-from factories import NOW, make_account, make_context
+
 from risk_engine.app.rules import consecutive_losses
+
+from .factories import NOW, make_account, make_context
 
 
 def test_passes_when_below_loss_limit():

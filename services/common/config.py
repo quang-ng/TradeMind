@@ -65,6 +65,8 @@ class SchedulerSettings(BaseSettings):
     timeframe: str = "1h"
     candle_lookback: int = 200
     symbols: list[str] = ["BTC/USDT", "ETH/USDT"]
+    candle_settle_second: int = 15
+    scheduler_health_port: int = 8000
 
 
 class AccountSettings(BaseSettings):
@@ -87,6 +89,8 @@ class FreqtradeSettings(BaseSettings):
     freqtrade_api_user: str = ""
     freqtrade_api_pass: str = ""
     freqtrade_request_timeout_seconds: float = 15.0
+    reconciliation_interval_seconds: float = 60.0
+    reconciliation_order_age_minutes: int = 10
 
 
 class WebhookSettings(BaseSettings):

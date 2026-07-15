@@ -16,10 +16,11 @@ import pytest
 from common.config import AccountSettings, DatabaseSettings, RiskConfig
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
-from risk_engine.app.freqtrade_client import FreqtradeClient
-from risk_engine.app.main import process_signal
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from risk_engine.app.freqtrade_client import FreqtradeClient
+from risk_engine.app.main import process_signal
 
 
 class FakeRedis:

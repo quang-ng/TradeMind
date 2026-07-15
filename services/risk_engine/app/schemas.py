@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from common.config import RiskConfig
 from common.enums import Action
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from .sizing import SizingResult
 
@@ -57,3 +58,20 @@ class RuleContext:
     killswitch_enabled: bool
     is_duplicate_decision: bool
     candidate: SizingResult
+
+
+class FreqtradeTrade(BaseModel):
+    """Typed subset of Freqtrade's trade response used for reconciliation."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    trade_id: int = Field(validation_alias=AliasChoices("trade_id", "id"))
+    pair: str
+    is_open: bool
+    amount: Decimal | None = None
+    open_rate: Decimal | None = None
+    close_rate: Decimal | None = None
+    profit_abs: Decimal | None = None
+    profit_ratio: Decimal | None = None
+    open_date: datetime | None = None
+    close_date: datetime | None = None

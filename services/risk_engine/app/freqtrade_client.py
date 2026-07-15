@@ -3,6 +3,9 @@ from typing import Any
 
 import httpx
 from common.config import FreqtradeSettings
+from pydantic import ValidationError
+
+from .schemas import FreqtradeTrade
 
 
 class FreqtradeUnavailable(Exception):
@@ -44,6 +47,14 @@ class FreqtradeClient:
         """PROJECT.md Section 5.1 (exit path, Phase 3)."""
         return await self._post("/api/v1/forceexit", {"tradeid": str(trade_id)})
 
+    async def get_trade(self, *, trade_id: int) -> FreqtradeTrade:
+        """Return Freqtrade's authoritative state for one submitted trade."""
+        payload = await self._get(f"/api/v1/trade/{trade_id}")
+        try:
+            return FreqtradeTrade.model_validate(payload)
+        except ValidationError as exc:
+            raise FreqtradeUnavailable(f"invalid trade response: {exc}") from exc
+
     async def _post(self, path: str, payload: dict) -> dict:
         try:
             response = await self._http_client.post(path, json=payload)
@@ -54,6 +65,17 @@ class FreqtradeClient:
             return response.json()
         except ValueError as exc:
             raise FreqtradeUnavailable(f"malformed response: {exc}") from exc
+
+    async def _get(self, path: str) -> dict:
+        try:
+            response = await self._http_client.get(path)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise FreqtradeUnavailable(str(exc)) from exc
+        if not isinstance(payload, dict):
+            raise FreqtradeUnavailable("malformed response: expected an object")
+        return payload
 
     async def aclose(self) -> None:
         if self._owns_client:

@@ -1,0 +1,10 @@
+# Production overlay: internal service APIs have no host-published ports.
+# The Admin API remains bound to host loopback by docker-compose.yml and
+# should be reached through a host reverse proxy, VPN, or SSH tunnel.
+services:
+  redis:
+    ports: !reset []
+  llm_service:
+    ports: !reset []
+  freqtrade:
+    ports: !reset []

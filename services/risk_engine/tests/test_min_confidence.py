@@ -1,8 +1,10 @@
 from decimal import Decimal
 
 from common.enums import RejectionReason
-from factories import make_context, make_signal
+
 from risk_engine.app.rules import min_confidence
+
+from .factories import make_context, make_signal
 
 
 def test_passes_above_threshold():

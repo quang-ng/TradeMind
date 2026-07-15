@@ -27,6 +27,7 @@ from .account_state import load_account_state
 from .evaluator import RiskDecisionResult, evaluate
 from .exit_evaluator import ExitDecisionResult, evaluate_exit
 from .freqtrade_client import FreqtradeClient, FreqtradeUnavailable
+from .reconciliation import run_reconciliation_loop
 from .schemas import SignalView
 
 configure_json_logging()
@@ -438,4 +439,7 @@ async def run_consumer() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run_consumer())
+    async def run_service() -> None:
+        await asyncio.gather(run_consumer(), run_reconciliation_loop())
+
+    asyncio.run(run_service())

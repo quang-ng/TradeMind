@@ -22,7 +22,9 @@ async def test_status_defaults_with_empty_db(client, auth_headers):
     assert body["pairs"]["ETH/USDT"]["last_action"] is None
 
 
-async def test_status_reflects_open_position_and_latest_signal(client, db_session_factory):
+async def test_status_reflects_open_position_and_latest_signal(
+    client, db_session_factory, auth_headers
+):
     async with db_session_factory() as session:
         trace_id = uuid.uuid4()
         signal_id = uuid.uuid4()
@@ -80,7 +82,7 @@ async def test_status_reflects_open_position_and_latest_signal(client, db_sessio
         )
         await session.commit()
 
-    response = await client.get("/status", headers=AUTH_HEADERS)
+    response = await client.get("/status", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
     assert body["open_positions"] == 1

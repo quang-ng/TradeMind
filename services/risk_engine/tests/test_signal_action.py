@@ -1,6 +1,8 @@
 from common.enums import Action, RejectionReason
-from factories import make_context, make_signal
+
 from risk_engine.app.rules import signal_action
+
+from .factories import make_context, make_signal
 
 
 def test_passes_for_buy():

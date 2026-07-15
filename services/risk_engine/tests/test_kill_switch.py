@@ -1,6 +1,8 @@
 from common.enums import RejectionReason
-from factories import make_context
+
 from risk_engine.app.rules import kill_switch
+
+from .factories import make_context
 
 
 def test_passes_when_killswitch_disabled():

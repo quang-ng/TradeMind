@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="TradeMind LLM Analysis Service")
 
 
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 def get_settings() -> LLMServiceSettings:
     return LLMServiceSettings()
 

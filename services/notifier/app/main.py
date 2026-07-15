@@ -36,7 +36,10 @@ def _format_event(event: AuditEvent) -> str:
     elif et == AuditEventType.RISK_APPROVED.value:
         text = f"Risk decision: APPROVED (signal {p.get('signal_id')})"
     elif et == AuditEventType.RISK_REJECTED.value:
-        text = f"Risk decision: REJECTED (signal {p.get('signal_id')}) - {p.get('rejection_reason')}"
+        text = (
+            f"Risk decision: REJECTED (signal {p.get('signal_id')}) - "
+            f"{p.get('rejection_reason')}"
+        )
     elif et == AuditEventType.ORDER_SUBMITTED.value:
         text = f"Order submitted: {p.get('symbol')} {p.get('side')} ({p.get('status')})"
     elif et == AuditEventType.ORDER_FILLED.value:
@@ -46,7 +49,10 @@ def _format_event(event: AuditEvent) -> str:
     elif et == AuditEventType.ORDER_CANCELLED.value:
         text = f"Order cancelled: {p.get('symbol') or p.get('pair')} {p.get('side')}"
     elif et == AuditEventType.POSITION_OPENED.value:
-        text = f"Position opened: {p.get('pair')} @ {p.get('entry_price')} (amount {p.get('amount')})"
+        text = (
+            f"Position opened: {p.get('pair')} @ {p.get('entry_price')} "
+            f"(amount {p.get('amount')})"
+        )
     elif et == AuditEventType.POSITION_CLOSED.value:
         text = f"Position closed: {p.get('pair')} pnl_usdt={p.get('pnl_usdt')}"
     elif et == AuditEventType.KILLSWITCH_ENABLED.value:
@@ -55,6 +61,11 @@ def _format_event(event: AuditEvent) -> str:
         text = f"Kill switch disabled by {p.get('updated_by')}: {p.get('reason')}"
     elif et == AuditEventType.CONFIG_CHANGED.value:
         text = f"Risk config changed: {p.get('changes')}"
+    elif et == AuditEventType.RECONCILIATION_REQUIRED.value:
+        text = (
+            f"OPERATOR ACTION REQUIRED: stale order {p.get('order_id')} "
+            f"for {p.get('symbol')} could not be reconciled ({p.get('reason')})"
+        )
     else:
         text = f"{et}: {p}"
     return f"TradeMind | {et}\n{text}\ntrace_id={event.trace_id}"

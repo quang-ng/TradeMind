@@ -402,7 +402,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 |---|---|---|
 | `id` | UUID, PK | |
 | `trace_id` | UUID | |
-| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `POSITION_OPENED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED` |
+| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `POSITION_OPENED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED`, `RECONCILIATION_REQUIRED` |
 | `payload` | jsonb | Event-specific detail |
 | `created_at` | timestamptz | |
 
@@ -662,7 +662,7 @@ The Risk Engine is the system's fail-closed authority. This table governs behavi
 | Redis unavailable | Scheduler cannot acquire locks or publish signals → **no new cycles run**. Existing open positions are untouched (Freqtrade manages its own stop-loss independently of Redis) |
 | PostgreSQL unavailable | Risk Engine refuses to evaluate any signal (cannot read account state or write an audit row) → **fail closed, no approvals**. This is a deliberate trade-off: no audit row means no trade, ever |
 | Freqtrade API unreachable at approval time | `RiskDecision(approved=true)` is written, but `Order` is written as `FAILED` with the error; Telegram alerts immediately — this is treated as an operational incident, not a silent retry loop |
-| Freqtrade webhook never arrives (network blip) | Order remains `SUBMITTED`; a reconciliation job (Phase 5) polls Freqtrade's `/status` for orphaned trades older than N minutes and reconciles or alerts |
+| Freqtrade webhook never arrives (network blip) | Order remains `SUBMITTED`; the Risk Engine reconciliation loop polls Freqtrade's trade-detail API for orders older than 10 minutes. Unambiguous fills are persisted; missing or ambiguous state remains `SUBMITTED` and emits one `RECONCILIATION_REQUIRED` operator alert |
 | Binance API errors/rate limits during dry-run simulation | Handled by Freqtrade's own retry/backoff; TradeMind does not add a second retry layer on top (avoids duplicate-order risk) |
 | Telegram unreachable | Logged as a warning; never blocks or delays a trading decision — notification is best-effort, decisioning is not |
 | Any unhandled exception in the Risk Engine evaluation path | Caught at the top level, signal is marked `approved=false, reason=INTERNAL_ERROR`, exception logged with `trace_id`, Telegram alerted. **Never allowed to propagate into an approval by default.** |

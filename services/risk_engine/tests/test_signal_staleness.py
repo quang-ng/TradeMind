@@ -1,8 +1,10 @@
 from datetime import timedelta
 
 from common.enums import RejectionReason
-from factories import NOW, make_context, make_signal
+
 from risk_engine.app.rules import signal_staleness
+
+from .factories import NOW, make_context, make_signal
 
 
 def test_passes_for_fresh_signal():

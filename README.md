@@ -125,6 +125,9 @@ The repository currently contains the authoritative system specification and con
 
 Read [PROJECT.md](PROJECT.md) for the complete architecture, contracts, risk rules, API design, development phases, and acceptance criteria. Contributors and coding agents should also read [AGENTS.md](AGENTS.md) before making changes.
 
+Deployment, backup, and operational monitoring commands are documented in
+[DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Disclaimer
 
 TradeMind is an experimental software project, not financial advice. Cryptocurrency trading involves substantial risk. The MVP is explicitly designed for simulated dry-run execution and should not be used with real funds.

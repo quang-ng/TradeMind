@@ -3,8 +3,10 @@ from decimal import Decimal
 
 from common.config import RiskConfig
 from common.enums import Action, RejectionReason
-from factories import NOW, make_account, make_signal
+
 from risk_engine.app.evaluator import evaluate
+
+from .factories import NOW, make_account, make_signal
 
 
 def test_approves_when_all_rules_pass():

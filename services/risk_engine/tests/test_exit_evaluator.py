@@ -2,8 +2,10 @@ from datetime import timedelta
 
 from common.config import RiskConfig
 from common.enums import Action, RejectionReason
-from factories import NOW, make_account, make_signal
+
 from risk_engine.app.exit_evaluator import evaluate_exit
+
+from .factories import NOW, make_account, make_signal
 
 
 def test_approves_exit_when_position_open():

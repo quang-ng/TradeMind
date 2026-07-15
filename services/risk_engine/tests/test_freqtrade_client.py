@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
+
 from risk_engine.app.freqtrade_client import FreqtradeClient, FreqtradeUnavailable
 
 
@@ -42,6 +43,28 @@ async def test_forceexit_posts_trade_id():
     assert result == {"result": "Created exit order"}
     assert captured["url"].endswith("/api/v1/forceexit")
     assert b'"tradeid":"42"' in captured["body"]
+
+
+async def test_get_trade_returns_typed_trade_state():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/api/v1/trade/42")
+        return httpx.Response(
+            200,
+            json={
+                "trade_id": 42,
+                "pair": "BTC/USDT",
+                "is_open": True,
+                "amount": 0.01,
+                "open_rate": 60000,
+            },
+        )
+
+    client = _client_with_handler(handler)
+    trade = await client.get_trade(trade_id=42)
+
+    assert trade.trade_id == 42
+    assert trade.pair == "BTC/USDT"
+    assert trade.amount == Decimal("0.01")
 
 
 async def test_raises_freqtrade_unavailable_on_http_error():

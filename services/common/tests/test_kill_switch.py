@@ -5,12 +5,13 @@ the same rationale). Skips gracefully if no Postgres is reachable."""
 import uuid
 
 import pytest
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from common import kill_switch
 from common.config import DatabaseSettings
 from common.db.models import AuditEvent, SystemState
 from common.enums import AuditEventType
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 class FakeRedis:
@@ -67,7 +68,9 @@ async def test_enable_writes_postgres_redis_and_audit_event(db_session_factory):
 
         event = (
             await session.execute(
-                select(AuditEvent).where(AuditEvent.event_type == AuditEventType.KILLSWITCH_ENABLED.value)
+                select(AuditEvent).where(
+                    AuditEvent.event_type == AuditEventType.KILLSWITCH_ENABLED.value
+                )
             )
         ).scalar_one()
         assert event.payload == {"reason": "manual review", "updated_by": "api:admin"}

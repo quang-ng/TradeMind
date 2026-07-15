@@ -2,7 +2,6 @@ import logging
 from typing import Any
 
 import httpx
-
 from common.config import NotifierSettings
 
 logger = logging.getLogger(__name__)

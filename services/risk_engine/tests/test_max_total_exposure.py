@@ -1,8 +1,10 @@
 from decimal import Decimal
 
 from common.enums import RejectionReason
-from factories import make_account, make_context
+
 from risk_engine.app.rules import max_total_exposure
+
+from .factories import make_account, make_context
 
 
 def test_passes_when_within_exposure_cap():

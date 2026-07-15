@@ -1,6 +1,8 @@
 from common.enums import RejectionReason
-from factories import make_account, make_context
+
 from risk_engine.app.rules import max_open_positions
+
+from .factories import make_account, make_context
 
 
 def test_passes_when_below_limit_and_pair_not_open():

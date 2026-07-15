@@ -41,7 +41,13 @@ async def _apply(
     updated_by = body.updated_by or "api:admin"
     trace_id = uuid.uuid4()
     action = kill_switch.enable if enable else kill_switch.disable
-    await action(session, redis_client, reason=body.reason, updated_by=updated_by, trace_id=trace_id)
+    await action(
+        session,
+        redis_client,
+        reason=body.reason,
+        updated_by=updated_by,
+        trace_id=trace_id,
+    )
     await session.commit()
 
     state = await session.get(SystemState, 1)

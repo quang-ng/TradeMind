@@ -1,10 +1,11 @@
 import uuid
 
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from common import redis_keys
 from common.db.models import AuditEvent, SystemState
 from common.enums import AuditEventType
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def is_enabled(session: AsyncSession) -> bool:

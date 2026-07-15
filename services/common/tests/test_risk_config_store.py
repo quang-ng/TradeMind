@@ -4,10 +4,11 @@ Postgres reads/writes. Skips gracefully if no Postgres is reachable."""
 from decimal import Decimal
 
 import pytest
-from common.config import DatabaseSettings, RiskConfig
-from common.risk_config_store import apply_risk_config_patch, load_effective_risk_config
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from common.config import DatabaseSettings, RiskConfig
+from common.risk_config_store import apply_risk_config_patch, load_effective_risk_config
 
 
 @pytest.fixture

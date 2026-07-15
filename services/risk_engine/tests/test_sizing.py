@@ -3,6 +3,7 @@ from decimal import Decimal
 from common.config import RiskConfig
 from hypothesis import given
 from hypothesis import strategies as st
+
 from risk_engine.app.sizing import compute_sizing
 
 
