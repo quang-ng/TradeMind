@@ -9,7 +9,7 @@ def _provider_with_handler(handler) -> OllamaProvider:
     return OllamaProvider(base_url="http://test", model="llama3.2:3b", http_client=http_client)
 
 
-async def test_generate_posts_chat_request_with_schema_constrained_format():
+async def test_generate_posts_chat_request_without_grammar_constrained_format():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -30,13 +30,10 @@ async def test_generate_posts_chat_request_with_schema_constrained_format():
         {"role": "system", "content": "system prompt"},
         {"role": "user", "content": "user prompt"},
     ]
-    assert captured["body"]["format"]["required"] == [
-        "action",
-        "confidence",
-        "reasoning",
-        "key_indicators",
-        "invalidation_condition",
-    ]
+    # No `format` field — schema-constrained decoding measured at ~0.3
+    # tokens/sec on CPU, see ollama_provider.py's docstring.
+    assert "format" not in captured["body"]
+    assert captured["body"]["keep_alive"] == "90m"
     assert captured["body"]["stream"] is False
 
 

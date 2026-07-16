@@ -3,15 +3,23 @@ from typing import Any
 import httpx
 
 from .base import Provider
-from .output_schema import OUTPUT_SCHEMA
 
 
 class OllamaProvider(Provider):
-    """Talks to a self-hosted Ollama server's `/api/chat` endpoint,
-    requesting schema-constrained structured output (Ollama >=0.5's
-    `format` field) so the response matches PROJECT.md Section 8.2 the same
-    way AnthropicProvider's `output_config` does — not relying on prompt
-    compliance alone.
+    """Talks to a self-hosted Ollama server's `/api/chat` endpoint.
+
+    Deliberately does NOT set `format` (Ollama's grammar-constrained
+    structured output): measured on CPU inference, schema-constrained
+    decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec for
+    unconstrained prefill on the same request) — enough to blow the 30s
+    `/analyze` budget (Section 8.3) even after the prompt itself was cut to
+    a handful of candles. Free-form generation relies on the system
+    prompt's "respond with ONLY the JSON object" instruction instead;
+    non-conforming output already falls back safely to `HOLD` via
+    `validators.py`'s existing malformed/schema-invalid handling, so this
+    trades a small amount of format reliability for the model actually
+    finishing within budget. AnthropicProvider keeps `output_config`
+    structured output — no evidence of the same slowdown on hosted infra.
 
     `http_client` is injectable for tests (mirrors
     `risk_engine/app/freqtrade_client.py`'s pattern); `timeout=None` on the
@@ -40,7 +48,6 @@ class OllamaProvider(Provider):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "format": OUTPUT_SCHEMA,
                 "stream": False,
                 "options": {"temperature": 0},
                 # Cycles run hourly (PROJECT.md Section 5); Ollama's default
