@@ -184,7 +184,7 @@ sequenceDiagram
         SCH->>SCH: compute indicators (RSI, EMA, MACD, ATR, volume)
         SCH->>LLM: POST /analyze { symbol, candles, indicators, position_context }
 
-        alt LLM timeout (>30s) OR malformed JSON OR schema-invalid OR provider error
+        alt LLM timeout (>60s) OR malformed JSON OR schema-invalid OR provider error
             LLM-->>SCH: error
             SCH->>PG: INSERT Signal(action=HOLD, reason="llm_failure")
         else valid response
@@ -499,7 +499,7 @@ The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze
 }
 ```
 
-`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks the prompt alone exceeding the 30s `/analyze` budget (Section 8.3) before generation even starts. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
+`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks the prompt alone exceeding the 60s `/analyze` budget (Section 8.3) before generation even starts. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
 
 **Fields explicitly excluded from the input, by design** — the LLM must never see or infer from these:
 
@@ -542,8 +542,8 @@ Executed on every model response, in order. The first failure short-circuits to 
 
 | Failure mode | Behavior |
 |---|---|
-| Provider HTTP error / connection failure | One retry with backoff (max 1 retry, total budget 30s), then `HOLD` |
-| Timeout (> 30s total, including retry) | `HOLD` |
+| Provider HTTP error / connection failure | One retry with backoff (max 1 retry, total budget 60s), then `HOLD` |
+| Timeout (> 60s total, including retry) | `HOLD` |
 | Malformed / non-JSON response | `HOLD` (no retry — treat as a prompt/model problem, not a transient one) |
 | Schema validation failure (missing/extra/wrong-typed fields) | `HOLD` |
 | `action` outside enum | `HOLD` |
@@ -558,7 +558,7 @@ One interface (`providers/base.py`), selected by the single `LLM_PROVIDER` value
 - `anthropic` (`providers/anthropic_provider.py`) — hosted API, requires `LLM_API_KEY`.
 - `ollama` (`providers/ollama_provider.py`) — self-hosted, talks to the `ollama` Compose service (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, requires no external API key or account.
 
-Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the 30s `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
+Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the 60s `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
 
 **Runtime-configurable levers.** Which provider/model/temperature is active does not require an `llm_service` restart. `LLM_PROVIDER`/`ANTHROPIC_MODEL`/`OLLAMA_MODEL`/`OLLAMA_TEMPERATURE` are env-sourced defaults as above, layered with whatever has been persisted via `PATCH /config/llm` (Section 11) — same override-table pattern as `RiskConfig` (Section 9.1). The one difference: `llm_service` never reads this table itself, since it has no Postgres access (Section 3's Isolated Zone stays off `core_net`). Instead the Scheduler — which already holds a Postgres session and already calls `/analyze` every cycle — loads the effective config (`common/llm_config_store.py`) and forwards it as `AnalyzeRequest.provider_override`; `main.py` applies it on top of the service's own env settings for that one call only. `provider_override` is excluded from `build_user_prompt()`'s output — it is request-routing metadata, not part of the Section 8.1 input contract, and must never reach the model.
 

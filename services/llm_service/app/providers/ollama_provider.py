@@ -11,7 +11,7 @@ class OllamaProvider(Provider):
     Deliberately does NOT set `format` (Ollama's grammar-constrained
     structured output): measured on CPU inference, schema-constrained
     decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec for
-    unconstrained prefill on the same request) — enough to blow the 30s
+    unconstrained prefill on the same request) — enough to blow the 60s
     `/analyze` budget (Section 8.3) even after the prompt itself was cut to
     a handful of candles. Free-form generation relies on the system
     prompt's "respond with ONLY the JSON object" instruction instead;

@@ -22,7 +22,12 @@ class LLMServiceSettings(BaseSettings):
     ollama_base_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_temperature: float = 0.4
-    analyze_timeout_seconds: float = 30.0
+    # 60s (not the original 30s): on CPU-bound Ollama inference (llama3.2:3b),
+    # measured prompt-eval (~60 tok/s) + generation (~12.5 tok/s) regularly
+    # left little to no margin within 30s, producing frequent llm_timeout
+    # fallbacks even without contention. 60s fits comfortably inside the 5m
+    # scheduler cadence (SchedulerSettings.timeframe) with room to spare.
+    analyze_timeout_seconds: float = 60.0
 
 
 class RedisSettings(BaseSettings):
@@ -64,7 +69,10 @@ class SchedulerSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     llm_service_url: str = "http://localhost:8001/analyze"
-    llm_request_timeout_seconds: float = 35.0
+    # Must stay a few seconds above LLMServiceSettings.analyze_timeout_seconds
+    # (60s) so the service's own timeout fires first and returns a HOLD
+    # signal, rather than this HTTP client cutting the connection early.
+    llm_request_timeout_seconds: float = 65.0
     candle_lookback: int = 200
     # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
     # full lookback, but the LLM already receives those computed indicators
