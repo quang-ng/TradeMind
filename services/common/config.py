@@ -72,7 +72,7 @@ class SchedulerSettings(BaseSettings):
     # CPU-bound local providers a too-large ohlcv array can make the prompt
     # alone exceed the 30s /analyze budget (Section 8.3) before generation
     # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
-    llm_ohlcv_window: int = 30
+    llm_ohlcv_window: int = 8
     symbols: list[str] = ["BTC/USDT", "ETH/USDT"]
     candle_settle_second: int = 15
     scheduler_health_port: int = 8000
