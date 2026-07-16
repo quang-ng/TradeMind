@@ -8,7 +8,7 @@ the public network.
 
 - Docker Engine with the Compose plugin
 - 4 CPU, 8 GB RAM, and persistent SSD storage recommended for the core stack
-  (Postgres, Redis, Freqtrade, admin services)
+  (Postgres, Redis, Freqtrade, admin services, operator console)
 - if `LLM_PROVIDER=ollama` (self-hosted local model instead of a hosted API),
   add on top of the core stack: 4+ CPU cores and enough RAM to hold the model
   in memory — roughly 4-6 GB for a 3B-parameter model, 8+ GB for a 7-8B
@@ -58,6 +58,12 @@ curl --fail -H "Authorization: Bearer ${ADMIN_API_KEY}" \
 The status response must report `"dry_run": true` before the kill switch is
 disabled.
 
+Open `http://127.0.0.1:3000` on the Docker host and sign in with
+`ADMIN_API_KEY`. For access from another machine, place port 3000 behind the
+same VPN or TLS reverse proxy used for administrative access. Keep the
+loopback-only Compose binding and do not publish the console or Admin API
+directly to the internet.
+
 ## Release procedure
 
 1. Enable the kill switch.
@@ -67,7 +73,9 @@ disabled.
 5. Build images and run `docker compose up -d` using both Compose files.
 6. Verify every container is healthy and `migrate` exited with code zero.
 7. Verify `/status`, logs, and one manually triggered cycle per pair.
-8. Disable the kill switch only after reviewing the resulting trace IDs.
+8. Review the resulting trace IDs in the operator console, then disable the
+   kill switch only after the signal, risk-decision, and order timelines are
+   consistent.
 
 ## Monitoring
 

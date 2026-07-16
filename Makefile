@@ -1,4 +1,4 @@
-.PHONY: up down test lint migrate
+.PHONY: up down test lint migrate frontend-test frontend-lint frontend-build
 
 up:
 	docker compose up -d --build
@@ -14,3 +14,12 @@ lint:
 
 migrate:
 	uv run alembic upgrade head
+
+frontend-test:
+	cd frontend && npm test
+
+frontend-lint:
+	cd frontend && npm run lint
+
+frontend-build:
+	cd frontend && npm run build

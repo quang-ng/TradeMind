@@ -36,7 +36,7 @@ The system fails closed. Whenever any component is uncertain, unavailable, times
 - Enforce a deterministic Risk Engine that has final authority over every trade: sizing, exposure limits, loss limits, cooldowns, and a global kill switch.
 - Execute trades exclusively through Freqtrade, in dry-run mode, against Binance Spot.
 - Persist a complete, queryable audit trail of every signal, decision, and order in PostgreSQL.
-- Notify a human operator in real time via Telegram, and expose system state via a FastAPI admin API.
+- Notify a human operator in real time via Telegram, expose system state via a FastAPI admin API, and provide a browser operator console so routine monitoring does not require SSH access.
 - Be architected so the LLM component is physically and logically incapable of reaching the exchange or determining position size, even if its own logic is compromised or misbehaves.
 
 ### 2.2 Non-Goals (MVP)
@@ -50,7 +50,7 @@ Explicitly out of scope for the MVP — do not build these unless the scope in S
 - Multiple simultaneous LLM providers, ensembling, or model voting.
 - Strategy backtesting/optimization tooling (Freqtrade's own backtesting may be used ad hoc for research, but is not a product feature).
 - Portfolio rebalancing, DCA, grid trading, or any strategy family beyond single-entry/single-exit long positions.
-- A user-facing web UI or mobile app (the FastAPI admin API and Telegram are the only interfaces).
+- A multi-user public web application or mobile app. The browser console is a single-operator Administration Zone client and is never exposed directly to the public internet.
 - Fully autonomous operation without a human-operable kill switch.
 - Horizontal scaling / multi-tenant deployment (single operator, single deployment).
 
@@ -62,7 +62,7 @@ Three trust zones matter more than any other architectural detail in this system
 
 1. **Isolated Zone** — the LLM Analysis Service. No exchange credentials, no network path to Binance or Freqtrade. Its only output channel is Redis.
 2. **Core Trading Zone** — Scheduler, Risk Engine, and Freqtrade. This is the only zone that holds exchange configuration and can cause capital to move (even in dry-run).
-3. **Administration Zone** — FastAPI admin API and the Telegram notifier. Read/observe the system and issue control commands (e.g., kill switch); never issue trade orders directly.
+3. **Administration Zone** — FastAPI admin API, React operator console, and the Telegram notifier. Read/observe the system and issue control commands (e.g., kill switch); never issue trade orders directly.
 
 ```mermaid
 graph TB
@@ -84,6 +84,7 @@ graph TB
 
     subgraph ADMIN["Administration Zone"]
         API["FastAPI Admin API"]
+        UI["React Operator Console"]
         NOTIFY["Telegram Notifier"]
     end
 
@@ -113,6 +114,7 @@ graph TB
     API -. "read-only" .-> REDIS
     API -- "kill switch write" --> REDIS
     API -- "kill switch write" --> PG
+    UI -- "authenticated admin requests" --> API
 
     style LLM fill:#4a3b7a,stroke:#2b2145,color:#fff
     style BINANCE fill:#7a2b2b,stroke:#4a1818,color:#fff
@@ -135,6 +137,7 @@ graph TB
 | **PostgreSQL** | Durable, queryable audit history: every signal, decision, order, position, and system-state change | `signals`, `risk_decisions`, `orders`, `positions`, `audit_events`, `system_state` | Be bypassed — no component may take an action that changes trading state without a corresponding row written here |
 | **Redis** | Low-latency coordination: pending-signal queue, per-cycle locks, idempotency keys, cached latest state, kill-switch flag cache | Ephemeral/coordination state only (Section 10.2) | Be the system of record — anything in Redis that matters for audit must also land in PostgreSQL |
 | **FastAPI Admin API** | Human-facing read/observe/control surface | HTTP interface, auth, kill-switch endpoint, config read/patch, Freqtrade webhook ingestion | Place trades directly; expose exchange credentials |
+| **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
 | **Telegram Notifier** | Push real-time notifications for signals, decisions, orders, and kill-switch events | Outbound Telegram messages only | Be a control channel for anything beyond a documented kill-switch command (Section 11) |
 
 ---
@@ -300,6 +303,10 @@ trademind/
 │   │                           # — secrets (WEBHOOK_SHARED_SECRET, FREQTRADE_API_USER/PASS,
 │   │                           # FREQTRADE_JWT_SECRET) are env vars, never baked into the image
 │   ├── docker-entrypoint.sh
+│   └── Dockerfile
+├── frontend/                       # React/TypeScript operator console
+│   ├── src/                        # typed API client and dashboard views
+│   ├── nginx.conf                  # static hosting + /api reverse proxy
 │   └── Dockerfile
 ├── scripts/
 │   └── seed_dev_data.py
@@ -551,7 +558,7 @@ One interface (`providers/base.py`), selected by the single `LLM_PROVIDER` value
 - `anthropic` (`providers/anthropic_provider.py`) — hosted API, requires `LLM_API_KEY`.
 - `ollama` (`providers/ollama_provider.py`) — self-hosted, talks to the `ollama` Compose service (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, requires no external API key or account.
 
-Both request the exact same `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2) as schema-constrained structured output — Anthropic via `output_config`, Ollama via `/api/chat`'s `format` field — so `validators.py`'s parsing/fallback pipeline is identical regardless of which provider is active. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
+Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the 30s `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
 
 ### 8.5 System prompt constraints (skeleton)
 
@@ -715,6 +722,8 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 
 Single-operator, self-hosted deployment: authentication is a static API key (`ADMIN_API_KEY`) passed as a bearer token. Not designed for multi-tenant or public exposure — intended to sit behind a VPN/reverse-proxy with TLS if exposed beyond localhost.
 
+The React Operator Console is served on host loopback port `3000` by default and calls these endpoints only through its same-origin `/api` reverse proxy. The operator enters `ADMIN_API_KEY` at session start; the key is held in browser `sessionStorage`, is not persisted across browser sessions, and is never injected into or built into the frontend container. The console observes the resources below and invokes only the existing Administration Zone controls. It has no direct execution endpoint or path to Freqtrade.
+
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
 | `GET` | `/health` | Liveness probe | none |
@@ -773,7 +782,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 | **1 — Data & LLM Integration** | Market data fetcher, indicator computation, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for both pairs; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
 | **2 — Risk Engine** | All 12 rules (Section 9.1), position sizing, Redis locks/idempotency, Postgres persistence for `Signal`/`RiskDecision`/`AuditEvent` | One passing unit test per rule; a property-based test proves position size never exceeds `max_position_pct` or `free_balance` under randomized inputs |
 | **3 — Freqtrade Execution (dry-run)** | Freqtrade container + `ExternalSignalStrategy`, `forceenter`/`forceexit` integration, webhook receiver, `Order`/`Position` persistence | A manually triggered end-to-end dry-run trade goes from `Signal` → `RiskDecision` → `Order(FILLED)` → `Position(OPEN)`, visible identically in Postgres and the Freqtrade UI |
-| **4 — Admin API & Notifications** | Full endpoint set (Section 11), Telegram notifications on every audit event, kill switch wired end-to-end via both surfaces | Operator can fully observe system state and halt trading via Telegram alone, without SSH/server access |
+| **4 — Admin API, Console & Notifications** | Full endpoint set (Section 11), React operator console, Telegram notifications on every audit event, kill switch wired end-to-end through Administration Zone clients | Operator can fully observe signals, decisions, money, orders, positions, and audit traces and halt trading without SSH/server access |
 | **5 — Hardening & Scheduling** | Real APScheduler cron on candle closes for both pairs, chaos tests (kill Redis/Postgres/LLM/Freqtrade mid-cycle), orphaned-order reconciliation job, docs pass | All items in Section 13 pass; a 72-hour unattended dry-run produces zero unhandled exceptions and a fully reconstructable audit trail for every cycle |
 
 ---
@@ -782,7 +791,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 
 The MVP is complete when all of the following hold:
 
-- [ ] `docker compose up` brings up all services (llm_service, scheduler, risk_engine, freqtrade, admin_api, notifier, postgres, redis) with no manual steps beyond populating `.env`.
+- [ ] `docker compose up` brings up all services (llm_service, scheduler, risk_engine, freqtrade, admin_api, frontend, notifier, postgres, redis) with no manual steps beyond populating `.env`.
 - [ ] The system runs a cycle for BTC/USDT and ETH/USDT on every closed 1h candle, and only on closed candles (never an in-progress candle).
 - [ ] A malformed, timed-out, or schema-invalid LLM response always results in a persisted `Signal(action=HOLD)` and never an exception that skips audit logging.
 - [ ] The Risk Engine rejects any signal that violates a Section 9.1 rule, and the rejection reason is queryable via `GET /decisions`.
@@ -791,6 +800,7 @@ The MVP is complete when all of the following hold:
 - [ ] All trades execute exclusively in dry-run mode; no code path submits a live order when `DRY_RUN=true`.
 - [ ] Every `Signal`, `RiskDecision`, `Order`, and `Position` change is reconstructable end-to-end from Postgres via a single `trace_id`.
 - [ ] The global kill switch, once enabled (manually or via the daily-loss circuit breaker), blocks every subsequent entry until explicitly disabled, verified by an integration test.
+- [ ] The operator console displays system status, equity/P&L, signals, risk decisions, orders, positions, raw model detail, and trace audit timelines using only authenticated Admin API calls; its kill-switch and risk-config actions use the same audited API paths as other Administration Zone clients.
 - [ ] Telegram receives a message for every signal, every risk decision (approved or rejected), every order state change, and every kill-switch transition.
 - [ ] The LLM Analysis Service container has no network route to Binance or Freqtrade and holds no exchange credentials, verified by inspecting the Compose network configuration and container environment.
 - [ ] Killing Redis, Postgres, or the LLM Service mid-cycle results in the documented fail-closed behavior (Section 9.4), not a crash loop or a silent approval.

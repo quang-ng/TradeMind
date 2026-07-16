@@ -37,6 +37,7 @@ flowchart LR
 
     subgraph Admin[Administration Zone]
         API[Admin API]
+        Console[React Operator Console]
         Telegram[Telegram Notifier]
     end
 
@@ -54,6 +55,7 @@ flowchart LR
     Risk --> Postgres
     API --> Postgres
     API --> Redis
+    Console --> API
     Risk --> Telegram
     API --> Telegram
 ```
@@ -61,6 +63,7 @@ flowchart LR
 - **Isolated Zone:** analyzes supplied market context only. It has no Binance or Freqtrade credentials, no account balance data, and no execution path.
 - **Core Trading Zone:** schedules analysis, applies risk rules, calculates position size and stop-loss values, and sends approved orders to Freqtrade.
 - **Administration Zone:** exposes system status and controls, records Freqtrade webhooks, and sends Telegram notifications. It never places trades directly.
+- **Operator console:** provides a browser view of equity, P&L, signals, decisions, orders, positions, audit traces, and risk controls. It only calls the authenticated Admin API and has no direct execution path.
 
 PostgreSQL is the durable audit system of record. Redis is used only for coordination, streams, locks, idempotency, cached state, and the kill-switch flag.
 
@@ -85,6 +88,22 @@ All examples assume `.env` is populated (see [DEPLOYMENT.md](DEPLOYMENT.md)) and
 ```bash
 set -a; source .env; set +a
 ```
+
+### Operator console (port 3000)
+
+Open `http://127.0.0.1:3000` and enter the configured `ADMIN_API_KEY`. The key
+is retained only for the current browser session. The console provides:
+
+- overall equity, daily and realized P&L, exposure, pair status, and cycle freshness;
+- every LLM signal, confidence score, reasoning, raw response, and corresponding risk decision;
+- the complete order ledger and open/closed position history;
+- a chronological audit drawer for any trading-cycle `trace_id`;
+- editable, audited risk configuration and manual analysis-cycle triggers; and
+- the global kill switch, with a mandatory reason recorded in the audit trail.
+
+The console and Admin API bind to host loopback by default. Use a VPN or TLS
+reverse proxy for remote access; do not publish either service directly to
+the internet.
 
 ### Admin API (port 8000)
 
@@ -143,10 +162,10 @@ More monitoring commands (logs, Postgres queries, Redis checks, backups) are in 
 | Execution | Freqtrade, dry-run only |
 | Analysis | One configured LLM provider |
 | Storage | PostgreSQL and Redis |
-| Operator interfaces | FastAPI admin API and Telegram |
+| Operator interfaces | React console, FastAPI admin API, and Telegram |
 | Deployment | Self-hosted with Docker Compose |
 
-Live funds, leverage, shorting, multiple exchanges, additional pairs or timeframes, model ensembles, and a user-facing web UI are intentionally outside the MVP.
+Live funds, leverage, shorting, multiple exchanges, additional pairs or timeframes, model ensembles, and multi-user/public applications are intentionally outside the MVP.
 
 ## Safety guarantees
 
@@ -169,6 +188,7 @@ The proposed monorepo contains:
 - `services/admin_api` — status, audit, configuration, kill-switch, and webhook APIs;
 - `services/notifier` — Telegram event notifications;
 - `services/common` — shared typed models, configuration, database code, and Redis keys; and
+- `frontend` — React/TypeScript single-operator console served through Nginx; and
 - `freqtrade` — dry-run order execution with no autonomous entry strategy.
 
 Implementation is planned in phases: foundations, data and LLM integration, Risk Engine, dry-run execution, administration and notifications, then hardening and scheduling.

@@ -249,6 +249,27 @@ services:
     networks:
       - core_net
       - llm_net
+      - admin_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Administration Zone browser console. Nginx serves the compiled React
+  # application and proxies /api to admin_api. The operator supplies the API
+  # key in the browser session; no secret is injected into this container.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      admin_api:
+        condition: service_healthy
+    networks:
+      - admin_net
     restart: unless-stopped
     logging:
       options:
@@ -291,6 +312,7 @@ services:
 networks:
   core_net:
   llm_net:
+  admin_net:
 
 volumes:
   postgres_data:
