@@ -15,6 +15,12 @@ const payloads: Record<string, unknown> = {
   '/api/orders?limit=100': [],
   '/api/positions': [],
   '/api/config': { dry_run: true },
+  '/api/config/llm': {
+    llm_provider: 'anthropic',
+    anthropic_model: 'claude-sonnet-5',
+    ollama_model: 'llama3.2:3b',
+    ollama_temperature: 0.4,
+  },
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -32,7 +38,7 @@ describe('Admin API client', () => {
 
     const dashboard = await loadDashboard('secret-key')
 
-    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(fetchMock).toHaveBeenCalledTimes(7)
     expect(dashboard.status.equity_usdt).toBe('5000')
     expect(dashboard.orders).toEqual([])
   })

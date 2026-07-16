@@ -33,6 +33,19 @@ class PositionContext(BaseModel):
     unrealized_pnl_pct: float | None = None
 
 
+class ProviderOverride(BaseModel):
+    """Effective LLM config computed by the Scheduler from
+    `common.llm_config_store` (env defaults + any persisted
+    `PATCH /config/llm`) and forwarded per-request, since `llm_service`
+    itself has no DB access (PROJECT.md Section 3: Isolated Zone). Absent
+    fields fall back to this service's own env-sourced `LLMServiceSettings`."""
+
+    llm_provider: Literal["anthropic", "ollama"] | None = None
+    anthropic_model: str | None = None
+    ollama_model: str | None = None
+    ollama_temperature: float | None = None
+
+
 class AnalyzeRequest(BaseModel):
     symbol: Literal["BTC/USDT", "ETH/USDT"]
     # "1h" is the intended live-trading cadence (PROJECT.md Section 2.1);
@@ -42,6 +55,7 @@ class AnalyzeRequest(BaseModel):
     ohlcv: list[Candle]
     indicators: Indicators
     position_context: PositionContext
+    provider_override: ProviderOverride | None = None
 
 
 class LLMOutput(BaseModel):

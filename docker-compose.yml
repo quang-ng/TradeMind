@@ -133,6 +133,18 @@ services:
       LLM_SERVICE_URL: http://llm_service:8000/analyze
       TIMEFRAME: ${TIMEFRAME:-5m}
       CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
+      # Must mirror llm_service's own LLM_PROVIDER/ANTHROPIC_MODEL/OLLAMA_MODEL/
+      # OLLAMA_TEMPERATURE defaults below (PROJECT.md Section 8.4) — the
+      # Scheduler computes the *effective* LLM config (these env defaults
+      # layered with any persisted `PATCH /config/llm` override) and forwards
+      # it per-request, since llm_service itself has no DB access to read
+      # overrides directly (Section 3: Isolated Zone stays off core_net).
+      # A mismatch here would silently diverge from what llm_service is
+      # actually configured with whenever no DB override exists yet.
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_TEMPERATURE: ${OLLAMA_TEMPERATURE:-0.4}
     depends_on:
       migrate:
         condition: service_completed_successfully

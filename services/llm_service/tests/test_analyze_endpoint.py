@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from common.config import LLMServiceSettings
 from fastapi.testclient import TestClient
+from llm_service.app import main as main_module
 from llm_service.app.main import app, get_provider_dependency, get_settings
 from llm_service.app.providers.base import Provider
 
@@ -11,15 +12,23 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class StubProvider(Provider):
-    def __init__(self, response_text: str | None = None, raise_exc: Exception | None = None):
+    def __init__(
+        self,
+        response_text: str | None = None,
+        raise_exc: Exception | None = None,
+        captured_prompts: list[tuple[str, str]] | None = None,
+    ):
         self._response_text = response_text
         self._raise_exc = raise_exc
+        self._captured_prompts = captured_prompts
 
     @property
     def model(self) -> str:
         return "stub-model"
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
+        if self._captured_prompts is not None:
+            self._captured_prompts.append((system_prompt, user_prompt))
         if self._raise_exc is not None:
             raise self._raise_exc
         return self._response_text
@@ -166,3 +175,72 @@ def test_analyze_never_raises_an_unhandled_exception_on_failure():
         response = client.post("/analyze", json=request_payload)
 
     assert response.status_code == 200
+
+
+def test_analyze_uses_dependency_provider_when_no_override_present():
+    app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
+        response_text=json.dumps(
+            {
+                "action": "HOLD",
+                "confidence": 0.5,
+                "reasoning": "n/a",
+                "key_indicators": [],
+                "invalidation_condition": "n/a",
+            }
+        )
+    )
+
+    request_payload = _load_fixture("analyze_request_btcusdt.json")
+    with TestClient(app) as client:
+        response = client.post("/analyze", json=request_payload)
+
+    assert response.status_code == 200
+    assert response.json()["model_name"] == "stub:stub-model"
+
+
+def test_analyze_routes_through_provider_override_bypassing_the_injected_default(monkeypatch):
+    """PROJECT.md Section 3/8.4: the Scheduler computes the effective LLM
+    config and forwards it as `provider_override` on every real request; the
+    DI-injected default provider must not be used when it's present."""
+    captured_prompts: list[tuple[str, str]] = []
+    captured_settings: list[LLMServiceSettings] = []
+    override_provider = StubProvider(
+        response_text=json.dumps(
+            {
+                "action": "BUY",
+                "confidence": 0.9,
+                "reasoning": "override path",
+                "key_indicators": [],
+                "invalidation_condition": "n/a",
+            }
+        ),
+        captured_prompts=captured_prompts,
+    )
+
+    def fake_get_provider(settings: LLMServiceSettings):
+        captured_settings.append(settings)
+        return override_provider
+
+    monkeypatch.setattr(main_module, "get_provider", fake_get_provider)
+    # The DI-injected provider should never be called once an override is present.
+    app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
+        raise_exc=AssertionError("DI-injected provider must not be used when overriding")
+    )
+
+    request_payload = _load_fixture("analyze_request_btcusdt.json")
+    request_payload["provider_override"] = {
+        "llm_provider": "ollama",
+        "ollama_model": "qwen2.5:7b",
+        "ollama_temperature": 0.9,
+    }
+    with TestClient(app) as client:
+        response = client.post("/analyze", json=request_payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "BUY"
+    assert body["model_name"] == "stub:stub-model"
+    assert captured_settings[0].llm_provider == "ollama"
+    assert captured_settings[0].ollama_model == "qwen2.5:7b"
+    assert captured_settings[0].ollama_temperature == 0.9
+    assert "provider_override" not in captured_prompts[0][1]

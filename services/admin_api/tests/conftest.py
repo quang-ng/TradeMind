@@ -48,6 +48,7 @@ async def db_session_factory():
             await session.execute(text(f"DELETE FROM {table}"))
         await session.execute(text("UPDATE system_state SET killswitch_enabled = false"))
         await session.execute(text("UPDATE risk_config_state SET overrides = NULL WHERE id = 1"))
+        await session.execute(text("UPDATE llm_config_state SET overrides = NULL WHERE id = 1"))
         await session.commit()
 
     async def override_get_db_session():

@@ -560,6 +560,8 @@ One interface (`providers/base.py`), selected by the single `LLM_PROVIDER` value
 
 Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the 30s `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
 
+**Runtime-configurable levers.** Which provider/model/temperature is active does not require an `llm_service` restart. `LLM_PROVIDER`/`ANTHROPIC_MODEL`/`OLLAMA_MODEL`/`OLLAMA_TEMPERATURE` are env-sourced defaults as above, layered with whatever has been persisted via `PATCH /config/llm` (Section 11) — same override-table pattern as `RiskConfig` (Section 9.1). The one difference: `llm_service` never reads this table itself, since it has no Postgres access (Section 3's Isolated Zone stays off `core_net`). Instead the Scheduler — which already holds a Postgres session and already calls `/analyze` every cycle — loads the effective config (`common/llm_config_store.py`) and forwards it as `AnalyzeRequest.provider_override`; `main.py` applies it on top of the service's own env settings for that one call only. `provider_override` is excluded from `build_user_prompt()`'s output — it is request-routing metadata, not part of the Section 8.1 input contract, and must never reach the model.
+
 ### 8.5 System prompt constraints (skeleton)
 
 The exact prompt text is an implementation detail tuned during Phase 1, but it must encode these constraints regardless of wording:
@@ -739,6 +741,8 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
 | `PATCH` | `/config` | Update risk parameters; writes `CONFIG_CHANGED` audit event | API key (Section 14: `dry_run` flips require extra confirmation) |
+| `GET` | `/config/llm` | Current effective LLM provider/model/temperature (Section 8.4 shape) | API key |
+| `PATCH` | `/config/llm` | Update LLM provider/model/temperature; writes `CONFIG_CHANGED` audit event; takes effect on the Scheduler's next cycle | API key |
 | `POST` | `/cycles/{symbol}/trigger` | Manually trigger a cycle out-of-band (debugging), subject to all normal risk rules | API key |
 | `POST` | `/webhooks/freqtrade` | Internal: receives Freqtrade trade-event callbacks | Shared secret (`WEBHOOK_SHARED_SECRET`), not the operator API key |
 

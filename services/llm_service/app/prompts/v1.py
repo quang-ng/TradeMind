@@ -27,4 +27,7 @@ Rules:
 
 
 def build_user_prompt(request: AnalyzeRequest) -> str:
-    return request.model_dump_json()
+    """Excludes `provider_override` (PROJECT.md Section 3/8.4's routing
+    metadata, not market data) — Section 8.1 defines exactly what the LLM
+    receives, and internal request-routing config is not on that list."""
+    return request.model_dump_json(exclude={"provider_override"})

@@ -12,6 +12,7 @@ from common.config import RedisSettings, SchedulerSettings
 from common.db.models import Position, Signal
 from common.db.session import get_session_factory
 from common.enums import Action, PositionStatus, SignalStatus
+from common.llm_config_store import EffectiveLLMConfig, load_effective_llm_config
 from sqlalchemy import select
 
 from .indicators import compute_indicators
@@ -106,6 +107,7 @@ async def _run_locked_cycle(
             )
         ).first() is not None
 
+        llm_config = await load_effective_llm_config(session)
         llm_result = await _request_signal(
             http_client,
             settings,
@@ -114,6 +116,7 @@ async def _run_locked_cycle(
             candles=candles,
             indicators=indicators,
             has_open_position=has_open_position,
+            llm_config=llm_config,
         )
 
         signal_row = Signal(
@@ -150,6 +153,7 @@ async def _request_signal(
     candles: list[dict],
     indicators: dict,
     has_open_position: bool,
+    llm_config: EffectiveLLMConfig,
 ) -> dict:
     """Calls the LLM Analysis Service's `/analyze` (PROJECT.md Section 8).
     The service itself always resolves model-level failures to a `HOLD`
@@ -178,6 +182,7 @@ async def _request_signal(
         ],
         "indicators": indicators,
         "position_context": {"has_open_position": has_open_position, "unrealized_pnl_pct": None},
+        "provider_override": llm_config.model_dump(),
     }
     try:
         response = await http_client.post(settings.llm_service_url, json=payload)

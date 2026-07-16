@@ -210,7 +210,7 @@ tbody tr:hover { background: #12201c; }
 .setting-field > span { font-size: 11px; font-weight: 600; }
 .setting-field > small { grid-column: 1; margin-top: 3px; color: var(--muted); font-size: 8px; }
 .setting-field > div { grid-column: 2; grid-row: 1 / 3; position: relative; display: flex; align-items: center; }
-.setting-field input { width: 100%; height: 36px; padding: 0 32px 0 10px; color: var(--text); border: 1px solid var(--border); border-radius: 7px; background: #0b1512; }
+.setting-field input, .setting-field select { width: 100%; height: 36px; padding: 0 32px 0 10px; color: var(--text); border: 1px solid var(--border); border-radius: 7px; background: #0b1512; }
 .setting-field b { position: absolute; right: 10px; color: var(--muted); font-size: 10px; }
 .settings-footer { display: flex; justify-content: flex-end; align-items: center; gap: 14px; padding: 15px 18px; }
 .save-message { flex: 1; color: var(--muted); font-size: 10px; }

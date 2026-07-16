@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FreqtradeWebhookPayload(BaseModel):
@@ -198,6 +198,23 @@ class RiskConfigPatch(BaseModel):
     # PROJECT.md Section 14 rule 13: flipping `dry_run` is a deliberate
     # human decision, gated by explicit confirmation in this flow.
     confirm_dry_run_change: bool = False
+
+
+# --- LLM config (PROJECT.md Section 8.4) ----------------------------------
+
+
+class LLMConfigOut(BaseModel):
+    llm_provider: str
+    anthropic_model: str
+    ollama_model: str
+    ollama_temperature: float
+
+
+class LLMConfigPatch(BaseModel):
+    llm_provider: Literal["anthropic", "ollama"] | None = None
+    anthropic_model: str | None = None
+    ollama_model: str | None = None
+    ollama_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
 
 # --- Manual cycle trigger --------------------------------------------------

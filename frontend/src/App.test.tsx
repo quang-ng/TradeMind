@@ -15,9 +15,11 @@ describe('Operator authentication', () => {
       const path = String(input)
       const data = path.endsWith('/status')
         ? { killswitch_enabled: false, dry_run: true, open_positions: 0, equity_usdt: '5000', daily_pnl_pct: '0', pairs: {} }
-        : path.endsWith('/config')
-          ? { dry_run: true, max_open_positions: 2 }
-          : []
+        : path.endsWith('/config/llm')
+          ? { llm_provider: 'anthropic', anthropic_model: 'claude-sonnet-5', ollama_model: 'llama3.2:3b', ollama_temperature: 0.4 }
+          : path.endsWith('/config')
+            ? { dry_run: true, max_open_positions: 2 }
+            : []
       return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     render(<App />)

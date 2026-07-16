@@ -29,8 +29,11 @@ class OllamaProvider(Provider):
     generation time.
     """
 
-    def __init__(self, base_url: str, model: str, http_client: Any = None):
+    def __init__(
+        self, base_url: str, model: str, http_client: Any = None, temperature: float = 0.4
+    ):
         self._model = model
+        self._temperature = temperature
         self._http_client = http_client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"), timeout=None
         )
@@ -49,7 +52,7 @@ class OllamaProvider(Provider):
                     {"role": "user", "content": user_prompt},
                 ],
                 "stream": False,
-                "options": {"temperature": 0},
+                "options": {"temperature": self._temperature},
                 # Cycles run hourly (PROJECT.md Section 5); Ollama's default
                 # keep_alive (5m) would unload the model between every
                 # cycle, paying the full model-load cost on each call. Keep

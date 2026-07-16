@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import httpx
@@ -54,12 +55,23 @@ class FakeResult:
         return None  # no open position
 
 
+class FakeLLMConfigState:
+    def __init__(self, overrides: dict):
+        self.overrides = overrides
+
+
 class FakeSession:
-    def __init__(self):
+    def __init__(self, llm_config_overrides: dict | None = None):
         self.added: list = []
+        self._llm_config_overrides = llm_config_overrides
 
     async def execute(self, _stmt):
         return FakeResult()
+
+    async def get(self, _model, _pk):
+        if self._llm_config_overrides is None:
+            return None  # no persisted LLMConfigState row -> env defaults apply
+        return FakeLLMConfigState(self._llm_config_overrides)
 
     def add(self, obj):
         self.added.append(obj)
@@ -188,6 +200,41 @@ async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeyp
     assert trace_id is not None
     signal_row = captured_session.added[0]
     assert signal_row.action == "HOLD"
+
+
+async def test_run_cycle_forwards_effective_llm_config_as_provider_override(monkeypatch, settings):
+    """PROJECT.md Section 3/8.4: llm_service has no DB access, so the
+    Scheduler loads the effective LLM config (env defaults + any persisted
+    `PATCH /config/llm` override) and forwards it on every `/analyze` call."""
+    candles = _candles(25)
+    monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
+    redis_client = FakeRedis()
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json=LLM_PAYLOAD)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    overrides = {"llm_provider": "ollama", "ollama_temperature": 0.9}
+
+    trace_id = await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=lambda: FakeSession(llm_config_overrides=overrides),
+        http_client=http_client,
+        settings=settings,
+    )
+
+    assert trace_id is not None
+    assert len(captured_requests) == 1
+    body = json.loads(captured_requests[0].content)
+    assert body["provider_override"] == {
+        "llm_provider": "ollama",
+        "anthropic_model": "claude-sonnet-5",
+        "ollama_model": "llama3.2:3b",
+        "ollama_temperature": 0.9,
+    }
 
 
 def _fake_fetch_closed_candles(candles: list[dict]):

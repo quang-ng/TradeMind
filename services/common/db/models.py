@@ -150,6 +150,26 @@ class RiskConfigState(Base):
     )
 
 
+class LLMConfigState(Base):
+    """Persisted overrides for the LLM decision-engine levers (provider,
+    model, temperature) — same pattern as `RiskConfigState`. `llm_service`
+    itself stays off `core_net` (Section 3's Isolated Zone) and never reads
+    this table directly; the Scheduler (which already has Postgres access
+    and already calls `/analyze` every cycle) loads the effective config and
+    forwards it as `AnalyzeRequest.provider_override`, so a config change
+    takes effect on the next cycle without crossing the trust-zone boundary
+    or restarting `llm_service`. Singleton row, id = 1, same pattern as
+    `SystemState`."""
+
+    __tablename__ = "llm_config_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    overrides: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class NotifierState(Base):
     """PROJECT.md Section 7.8 — singleton cursor state for the Telegram
     Notifier (Section 6): how far into `audit_events` it has already

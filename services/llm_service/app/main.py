@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI
 from .prompts.v1 import SYSTEM_PROMPT_V1, build_user_prompt
 from .providers import get_provider
 from .providers.base import Provider
-from .schemas import AnalyzeRequest, Signal
+from .schemas import AnalyzeRequest, ProviderOverride, Signal
 from .validators import ValidationFailure, build_hold_signal, build_signal, parse_llm_response
 
 configure_json_logging()
@@ -30,13 +30,22 @@ def get_provider_dependency(settings: LLMServiceSettings = Depends(get_settings)
     return get_provider(settings)
 
 
+def _apply_override(
+    settings: LLMServiceSettings, override: ProviderOverride
+) -> LLMServiceSettings:
+    updates = override.model_dump(exclude_none=True)
+    return settings.model_copy(update=updates) if updates else settings
+
+
 @app.post("/analyze", response_model=Signal)
 async def analyze(
     request: AnalyzeRequest,
     provider: Provider = Depends(get_provider_dependency),
     settings: LLMServiceSettings = Depends(get_settings),
 ) -> Signal:
-    model_name = f"{settings.llm_provider}:{provider.model}"
+    if request.provider_override is not None:
+        provider = get_provider(_apply_override(settings, request.provider_override))
+    model_name = f"{provider.provider_name}:{provider.model}"
     raw_text, failure_reason = await _call_provider_with_retry(
         provider, request, settings.analyze_timeout_seconds
     )

@@ -41,6 +41,7 @@ import {
   loadDashboard,
   setKillSwitch,
   triggerCycle,
+  updateLLMConfig,
   updateRiskConfig,
 } from './api'
 import { compactNumber, dateTime, money, percent, readable, shortId, timeAgo } from './format'
@@ -49,13 +50,14 @@ import type {
   AuditTimeline,
   DashboardData,
   Decision,
+  LLMConfig,
   Order,
   Position,
   RiskConfig,
   Signal,
 } from './types'
 
-type Page = 'overview' | 'signals' | 'orders' | 'positions' | 'risk'
+type Page = 'overview' | 'signals' | 'orders' | 'positions' | 'risk' | 'llm'
 type Detail = { kind: 'trace'; id: string } | { kind: 'signal'; id: string } | null
 
 const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -64,6 +66,7 @@ const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'orders', label: 'Orders', icon: ClipboardList },
   { id: 'positions', label: 'Positions & P&L', icon: WalletCards },
   { id: 'risk', label: 'Risk controls', icon: SlidersHorizontal },
+  { id: 'llm', label: 'LLM engine', icon: Bot },
 ]
 
 export default function App() {
@@ -249,6 +252,13 @@ export default function App() {
               data={data}
               onUpdated={(config) => setData({ ...data, config })}
               onRefresh={() => void refresh(true)}
+            />
+          )}
+          {page === 'llm' && (
+            <LLMConfigPage
+              apiKey={apiKey}
+              data={data}
+              onUpdated={(llmConfig) => setData({ ...data, llmConfig })}
             />
           )}
         </div>
@@ -619,6 +629,69 @@ function RiskPage({ apiKey, data, onUpdated, onRefresh }: { apiKey: string; data
           <div className="cycle-buttons">{Object.keys(data.status.pairs).map((symbol) => <button className="button secondary" key={symbol} onClick={() => void runCycle(symbol)} disabled={Boolean(cycleLoading)}>{cycleLoading === symbol ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />} Analyze {symbol}</button>)}</div>
         </Panel>
         <div className="warning-card"><AlertTriangle size={20} /><div><strong>Dry-run cannot be changed here</strong><p>Switching to live funds requires an explicit deployment-level human review. This console does not expose that path.</p></div></div>
+      </aside>
+    </div>
+  )
+}
+
+function LLMConfigPage({ apiKey, data, onUpdated }: { apiKey: string; data: DashboardData; onUpdated: (config: LLMConfig) => void }) {
+  const [draft, setDraft] = useState(data.llmConfig)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const save = async () => {
+    setSaving(true); setMessage(null)
+    try {
+      const patch: Partial<LLMConfig> = {}
+      ;(Object.keys(draft) as (keyof LLMConfig)[]).forEach((key) => {
+        if (draft[key] !== data.llmConfig[key]) Object.assign(patch, { [key]: draft[key] })
+      })
+      if (!Object.keys(patch).length) { setMessage('No settings changed.'); return }
+      const updated = await updateLLMConfig(apiKey, patch)
+      onUpdated(updated); setMessage('LLM settings saved and added to the audit trail.')
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not save LLM settings') }
+    finally { setSaving(false) }
+  }
+  return (
+    <div className="risk-layout">
+      <div className="page-stack">
+        <section className="section-intro">
+          <div><h2>LLM decision engine</h2><p>Controls which model classifies each signal as BUY, SELL, or HOLD. Changes are persisted and audited immediately.</p></div>
+          <span className="safety-chip"><ShieldCheck size={16} /> Risk Engine still governs every trade</span>
+        </section>
+        <Panel title="Provider and model" subtitle="Applies on the Scheduler's next cycle — no service restart required">
+          <div className="settings-grid">
+            <label className="setting-field">
+              <span>Provider</span>
+              <small>Which LLM backend analyzes each candle</small>
+              <div>
+                <select value={draft.llm_provider} onChange={(event) => setDraft({ ...draft, llm_provider: event.target.value as LLMConfig['llm_provider'] })}>
+                  <option value="anthropic">Anthropic (hosted)</option>
+                  <option value="ollama">Ollama (self-hosted)</option>
+                </select>
+              </div>
+            </label>
+            <label className="setting-field">
+              <span>Anthropic model</span>
+              <small>Used only when provider is Anthropic</small>
+              <div><input type="text" value={draft.anthropic_model} onChange={(event) => setDraft({ ...draft, anthropic_model: event.target.value })} /></div>
+            </label>
+            <label className="setting-field">
+              <span>Ollama model</span>
+              <small>Used only when provider is Ollama</small>
+              <div><input type="text" value={draft.ollama_model} onChange={(event) => setDraft({ ...draft, ollama_model: event.target.value })} /></div>
+            </label>
+            <label className="setting-field">
+              <span>Ollama temperature</span>
+              <small>Higher values reduce repetitive/boilerplate answers</small>
+              <div><input type="number" min="0" max="2" step="0.1" value={draft.ollama_temperature} onChange={(event) => setDraft({ ...draft, ollama_temperature: Number(event.target.value) })} /></div>
+            </label>
+          </div>
+          <div className="settings-footer">{message && <span className="save-message">{message}</span>}<button className="button primary" onClick={() => void save()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Save LLM settings</button></div>
+        </Panel>
+      </div>
+      <aside className="risk-aside">
+        <Panel title="Safety invariants"><ul className="check-list"><li><Check /> LLM output has no sizing field</li><li><Check /> Failures default to HOLD</li><li><Check /> Every signal still passes Risk Engine</li><li><Check /> Changes create audit events</li></ul></Panel>
+        <div className="warning-card"><AlertTriangle size={20} /><div><strong>The LLM never sees account data</strong><p>Balance, API keys, and position size are excluded from every request by design — switching provider or model here cannot grant execution access.</p></div></div>
       </aside>
     </div>
   )

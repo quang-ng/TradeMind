@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 
 _RESERVED_LOG_RECORD_ATTRS = {
     "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
@@ -13,6 +14,7 @@ _RESERVED_LOG_RECORD_ATTRS = {
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

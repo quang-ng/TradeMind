@@ -108,6 +108,13 @@ export interface RiskConfig {
   dry_run: boolean
 }
 
+export interface LLMConfig {
+  llm_provider: 'anthropic' | 'ollama'
+  anthropic_model: string
+  ollama_model: string
+  ollama_temperature: number
+}
+
 export interface DashboardData {
   status: SystemStatus
   signals: Signal[]
@@ -115,4 +122,5 @@ export interface DashboardData {
   orders: Order[]
   positions: Position[]
   config: RiskConfig
+  llmConfig: LLMConfig
 }

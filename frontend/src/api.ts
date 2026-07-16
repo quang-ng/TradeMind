@@ -1,4 +1,4 @@
-import type { AuditTimeline, DashboardData, RiskConfig, Signal } from './types'
+import type { AuditTimeline, DashboardData, LLMConfig, RiskConfig, Signal } from './types'
 
 const API_ROOT = '/api'
 
@@ -34,15 +34,16 @@ async function request<T>(path: string, apiKey: string, init?: RequestInit): Pro
 }
 
 export async function loadDashboard(apiKey: string): Promise<DashboardData> {
-  const [status, signals, decisions, orders, positions, config] = await Promise.all([
+  const [status, signals, decisions, orders, positions, config, llmConfig] = await Promise.all([
     request<DashboardData['status']>('/status', apiKey),
     request<DashboardData['signals']>('/signals?limit=100', apiKey),
     request<DashboardData['decisions']>('/decisions?limit=100', apiKey),
     request<DashboardData['orders']>('/orders?limit=100', apiKey),
     request<DashboardData['positions']>('/positions', apiKey),
     request<DashboardData['config']>('/config', apiKey),
+    request<DashboardData['llmConfig']>('/config/llm', apiKey),
   ])
-  return { status, signals, decisions, orders, positions, config }
+  return { status, signals, decisions, orders, positions, config, llmConfig }
 }
 
 export function getSignal(apiKey: string, signalId: string): Promise<Signal> {
@@ -70,6 +71,13 @@ export function triggerCycle(apiKey: string, symbol: string) {
 
 export function updateRiskConfig(apiKey: string, patch: Partial<RiskConfig>) {
   return request<RiskConfig>('/config', apiKey, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+export function updateLLMConfig(apiKey: string, patch: Partial<LLMConfig>) {
+  return request<LLMConfig>('/config/llm', apiKey, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
