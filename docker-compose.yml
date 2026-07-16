@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6382:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -52,9 +52,48 @@ services:
       - core_net
     restart: "no"
 
+  # Self-hosted local LLM runtime for llm_service's "ollama" provider
+  # (services/llm_service/app/providers/ollama_provider.py). Scoped to
+  # llm_net only — same Isolated Zone boundary as llm_service itself
+  # (PROJECT.md Section 3): no route to freqtrade, risk_engine, or core_net.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - llm_net
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # One-shot: pulls OLLAMA_MODEL so it is present before llm_service ever
+  # calls it — keeps "docker compose up" free of manual steps (PROJECT.md
+  # Section 13) the same way `migrate` does for the schema. Re-running is
+  # a cheap no-op once the model is cached.
+  ollama-pull:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - llm_net
+    restart: "no"
+
   # Isolated Zone (PROJECT.md Section 3): no exchange credentials, no route
   # to freqtrade or risk_engine — enforced here by network segmentation,
-  # not just convention. Only ever calls out to the LLM provider's API.
+  # not just convention. Only ever calls out to the LLM provider's API
+  # (the anthropic provider) or the ollama service (the ollama provider).
   llm_service:
     build:
       context: .
@@ -63,8 +102,13 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       LLM_API_KEY: ${LLM_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
     ports:
       - "127.0.0.1:8001:8000"
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -251,3 +295,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  ollama_data:

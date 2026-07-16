@@ -250,7 +250,7 @@ trademind/
 │   │   ├── app/
 │   │   │   ├── main.py            # FastAPI app: POST /analyze
 │   │   │   ├── prompts/           # versioned prompt templates
-│   │   │   ├── providers/         # one interface, one MVP implementation
+│   │   │   ├── providers/         # one interface, anthropic + ollama implementations
 │   │   │   ├── schemas.py         # pydantic input/output contracts (Section 8)
 │   │   │   └── validators.py      # schema + range validation, HOLD fallback
 │   │   ├── Dockerfile
@@ -313,8 +313,9 @@ trademind/
 |---|---|---|
 | `POSTGRES_DSN` | all services | Shared audit database connection |
 | `REDIS_URL` | all services | Coordination store connection |
-| `LLM_PROVIDER` | llm_service | Selects the single configured provider adapter |
-| `LLM_API_KEY` | llm_service only | Never injected into any other container |
+| `LLM_PROVIDER` | llm_service | Selects the single configured provider adapter: `anthropic` (hosted) or `ollama` (self-hosted) |
+| `LLM_API_KEY` | llm_service only | Anthropic provider only. Never injected into any other container |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | llm_service only | Ollama provider only. Base URL of the self-hosted Ollama server (the `ollama` Compose service, isolated-zone-only per Section 3) and the model tag to request |
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | freqtrade, risk_engine only | Never injected into llm_service, admin_api, or notifier |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | notifier | Outbound notifications |
 | `ADMIN_API_KEY` | admin_api | Auth for the admin API |
@@ -545,7 +546,12 @@ Every fallback-to-`HOLD` still produces a `Signal` row with `reasoning` overwrit
 
 ### 8.4 Provider abstraction
 
-One interface (`providers/base.py`), one concrete implementation configured via `LLM_PROVIDER` for the MVP. The interface exists so a second provider can be added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
+One interface (`providers/base.py`), selected by the single `LLM_PROVIDER` value configured for the deployment — never more than one active provider at a time (Section 2.2 rules out ensembling/model voting). Two concrete implementations exist:
+
+- `anthropic` (`providers/anthropic_provider.py`) — hosted API, requires `LLM_API_KEY`.
+- `ollama` (`providers/ollama_provider.py`) — self-hosted, talks to the `ollama` Compose service (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, requires no external API key or account.
+
+Both request the exact same `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2) as schema-constrained structured output — Anthropic via `output_config`, Ollama via `/api/chat`'s `format` field — so `validators.py`'s parsing/fallback pipeline is identical regardless of which provider is active. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
 
 ### 8.5 System prompt constraints (skeleton)
 

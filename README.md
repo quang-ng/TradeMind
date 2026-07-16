@@ -78,6 +78,60 @@ For each supported pair, one cycle runs after a 1-hour candle closes:
 
 Malformed responses, timeouts, unavailable dependencies, or ambiguous signals fail closed: no new trade is approved.
 
+## Checking system state
+
+All examples assume `.env` is populated (see [DEPLOYMENT.md](DEPLOYMENT.md)) and the stack is running via `docker compose up -d`. Export the credentials once per shell session:
+
+```bash
+set -a; source .env; set +a
+```
+
+### Admin API (port 8000)
+
+```bash
+# overall status: killswitch, equity, open positions, last cycle per pair
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" http://127.0.0.1:8000/status
+
+# every signal the system generated
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/signals?limit=20"
+
+# every risk decision — approved or rejected, with the reason
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/decisions?limit=20"
+
+# every order (submitted/filled/failed/cancelled); filter by symbol/status
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/orders?limit=20"
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/orders?symbol=BTC/USDT&status=FAILED"
+
+# open/closed positions
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/positions?status=open"
+
+# full timeline for one trading cycle (signal -> decision -> order -> position)
+curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/audit?trace_id=<uuid>"
+
+# manually trigger a cycle out-of-band (still subject to all risk rules)
+curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" http://127.0.0.1:8000/cycles/BTC-USDT/trigger
+
+# kill switch
+curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" -H "Content-Type: application/json" \
+  -d '{"reason": "manual review"}' http://127.0.0.1:8000/killswitch/enable
+curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" -H "Content-Type: application/json" \
+  -d '{"reason": "resuming"}' http://127.0.0.1:8000/killswitch/disable
+```
+
+### Freqtrade API (port 8080, direct)
+
+Freqtrade's own trade database is not the audit system of record (PROJECT.md Section 7) — use these for raw/direct inspection, but the admin API above is authoritative.
+
+```bash
+curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/ping
+curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/balance
+curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/status
+curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/trades
+curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/profit
+```
+
+More monitoring commands (logs, Postgres queries, Redis checks, backups) are in [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## MVP scope
 
 | Area | MVP choice |
@@ -121,7 +175,7 @@ Implementation is planned in phases: foundations, data and LLM integration, Risk
 
 ## Project status
 
-The repository currently contains the authoritative system specification and contribution guidance. Runtime services and setup commands will be added as the implementation phases are completed.
+All services described above are implemented and run via Docker Compose (see [DEPLOYMENT.md](DEPLOYMENT.md) for first-deployment steps). PROJECT.md Section 13's remaining acceptance item is operational, not code: a 72-hour unattended dry run with a fully consistent audit trail.
 
 Read [PROJECT.md](PROJECT.md) for the complete architecture, contracts, risk rules, API design, development phases, and acceptance criteria. Contributors and coding agents should also read [AGENTS.md](AGENTS.md) before making changes.
 

@@ -19,6 +19,8 @@ class LLMServiceSettings(BaseSettings):
     llm_provider: str = "anthropic"
     llm_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
+    ollama_base_url: str = "http://ollama:11434"
+    ollama_model: str = "llama3.2:3b"
     analyze_timeout_seconds: float = 30.0
 
 

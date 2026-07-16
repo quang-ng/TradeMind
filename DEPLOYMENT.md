@@ -7,7 +7,15 @@ the public network.
 ## Prerequisites
 
 - Docker Engine with the Compose plugin
-- 4 CPU, 8 GB RAM, and persistent SSD storage recommended
+- 4 CPU, 8 GB RAM, and persistent SSD storage recommended for the core stack
+  (Postgres, Redis, Freqtrade, admin services)
+- if `LLM_PROVIDER=ollama` (self-hosted local model instead of a hosted API),
+  add on top of the core stack: 4+ CPU cores and enough RAM to hold the model
+  in memory — roughly 4-6 GB for a 3B-parameter model, 8+ GB for a 7-8B
+  model, at Q4 quantization — plus a few GB of persistent disk per pulled
+  model. An NVIDIA GPU with `nvidia-container-toolkit` is optional but
+  strongly recommended: CPU-only inference risks exceeding the 30s `/analyze`
+  timeout (PROJECT.md Section 8.3) once you go past a small (~3B) model.
 - a VPN, SSH tunnel, or TLS reverse proxy for the Admin API
 - off-host encrypted backup storage
 

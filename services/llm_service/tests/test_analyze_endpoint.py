@@ -15,6 +15,10 @@ class StubProvider(Provider):
         self._response_text = response_text
         self._raise_exc = raise_exc
 
+    @property
+    def model(self) -> str:
+        return "stub-model"
+
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         if self._raise_exc is not None:
             raise self._raise_exc
@@ -22,6 +26,10 @@ class StubProvider(Provider):
 
 
 class SlowProvider(Provider):
+    @property
+    def model(self) -> str:
+        return "slow-model"
+
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         import asyncio
 

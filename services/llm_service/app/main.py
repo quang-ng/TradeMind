@@ -36,7 +36,7 @@ async def analyze(
     provider: Provider = Depends(get_provider_dependency),
     settings: LLMServiceSettings = Depends(get_settings),
 ) -> Signal:
-    model_name = f"{settings.llm_provider}:{settings.anthropic_model}"
+    model_name = f"{settings.llm_provider}:{provider.model}"
     raw_text, failure_reason = await _call_provider_with_retry(
         provider, request, settings.analyze_timeout_seconds
     )

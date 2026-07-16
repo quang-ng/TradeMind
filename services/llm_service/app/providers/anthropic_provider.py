@@ -1,25 +1,17 @@
 import anthropic
 
 from .base import Provider
-
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
-        "confidence": {"type": "number"},
-        "reasoning": {"type": "string"},
-        "key_indicators": {"type": "array", "items": {"type": "string"}},
-        "invalidation_condition": {"type": "string"},
-    },
-    "required": ["action", "confidence", "reasoning", "key_indicators", "invalidation_condition"],
-    "additionalProperties": False,
-}
+from .output_schema import OUTPUT_SCHEMA
 
 
 class AnthropicProvider(Provider):
     def __init__(self, api_key: str, model: str):
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         response = await self._client.messages.create(
