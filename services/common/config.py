@@ -64,7 +64,6 @@ class SchedulerSettings(BaseSettings):
 
     llm_service_url: str = "http://localhost:8001/analyze"
     llm_request_timeout_seconds: float = 35.0
-    timeframe: str = "1h"
     candle_lookback: int = 200
     # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
     # full lookback, but the LLM already receives those computed indicators
@@ -74,7 +73,17 @@ class SchedulerSettings(BaseSettings):
     # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
     llm_ohlcv_window: int = 8
     symbols: list[str] = ["BTC/USDT", "ETH/USDT"]
+    # Defaults to 5m so a demo/dry-run deployment sees a new signal every few
+    # minutes instead of waiting up to 1h. Set TIMEFRAME=1h for live trading
+    # (PROJECT.md Section 2.1's intended cadence) — this is a config change,
+    # not a code change.
+    timeframe: str = "5m"
     candle_settle_second: int = 15
+    # Per-symbol offset (see scheduler/app/main.py's stagger logic) so BTC
+    # and ETH cycles don't call the LLM service at the same instant — on a
+    # single local Ollama model, concurrent calls queue and can blow the
+    # analyze timeout (the second call effectively pays 2x generation time).
+    symbol_stagger_seconds: int = 40
     scheduler_health_port: int = 8000
 
 

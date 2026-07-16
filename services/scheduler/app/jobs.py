@@ -19,7 +19,14 @@ from .market_data import fetch_closed_candles
 
 logger = logging.getLogger(__name__)
 
-_TIMEFRAME_SECONDS = {"1h": 3600}
+_TIMEFRAME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def timeframe_to_seconds(timeframe: str) -> int:
+    """Parses ccxt-style timeframe strings (`"5m"`, `"1h"`, ...). Shared with
+    `scheduler/app/main.py` so the cron cadence and the candle-idempotency
+    TTL always agree on what one candle period means."""
+    return int(timeframe[:-1]) * _TIMEFRAME_UNIT_SECONDS[timeframe[-1]]
 
 
 async def run_cycle(
@@ -77,7 +84,7 @@ async def _run_locked_cycle(
 
     candle_ts_ms = candles[-1]["t"]
     idempotency_key = redis_keys.candle_idempotency(symbol, settings.timeframe, str(candle_ts_ms))
-    timeframe_seconds = _TIMEFRAME_SECONDS[settings.timeframe]
+    timeframe_seconds = timeframe_to_seconds(settings.timeframe)
     newly_claimed = await redis_client.set(idempotency_key, "1", nx=True, ex=2 * timeframe_seconds)
     if not newly_claimed:
         logger.info(

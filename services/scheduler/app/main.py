@@ -7,7 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from common.config import SchedulerSettings
 from common.logging import configure_json_logging
 
-from .jobs import run_cycle
+from .jobs import run_cycle, timeframe_to_seconds
 
 configure_json_logging()
 logger = logging.getLogger(__name__)
@@ -22,23 +22,49 @@ async def _run_scheduled_cycle(symbol: str) -> None:
         logger.exception("scheduled_cycle_failed", extra={"symbol": symbol})
 
 
+def _cron_minute_field(timeframe_seconds: int) -> str | int:
+    """Every candle period must divide evenly into an hour so the cron fires
+    exactly on candle-close boundaries (e.g. `5m` -> `*/5`, `1h` -> `0`)."""
+    if timeframe_seconds == 3600:
+        return 0
+    minutes, remainder = divmod(timeframe_seconds, 60)
+    if remainder or minutes <= 0 or 60 % minutes:
+        raise ValueError(
+            f"scheduler timeframe must divide evenly into 1h, got {timeframe_seconds}s"
+        )
+    return f"*/{minutes}"
+
+
 def build_scheduler(settings: SchedulerSettings | None = None) -> AsyncIOScheduler:
     settings = settings or SchedulerSettings()
     scheduler = AsyncIOScheduler(
         timezone=timezone.utc,
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
     )
-    for symbol in settings.symbols:
+    timeframe_seconds = timeframe_to_seconds(settings.timeframe)
+    minute_field = _cron_minute_field(timeframe_seconds)
+    for index, symbol in enumerate(settings.symbols):
+        # Stagger each symbol's settle second so concurrent cycles don't all
+        # call the LLM service in the same instant (see SchedulerSettings.
+        # symbol_stagger_seconds) — on a single local model, simultaneous
+        # calls queue and can blow the analyze timeout.
+        second = settings.candle_settle_second + index * settings.symbol_stagger_seconds
+        if second >= min(timeframe_seconds, 60):
+            raise ValueError(
+                f"stagger offset for {symbol} ({second}s) overruns the {timeframe_seconds}s "
+                "candle period or the 60s cron second field — reduce symbol_stagger_seconds "
+                "or candle_settle_second"
+            )
         scheduler.add_job(
             _run_scheduled_cycle,
             trigger=CronTrigger(
-                minute=0,
-                second=settings.candle_settle_second,
+                minute=minute_field,
+                second=second,
                 timezone=timezone.utc,
             ),
             args=[symbol],
             id=f"closed-candle:{symbol}",
-            name=f"TradeMind closed 1h candle cycle for {symbol}",
+            name=f"TradeMind closed {settings.timeframe} candle cycle for {symbol}",
             replace_existing=True,
         )
     return scheduler

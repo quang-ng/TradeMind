@@ -123,7 +123,9 @@ async def test_run_cycle_skips_when_candle_already_processed(monkeypatch, settin
     candles = _candles(25)
     monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
     candle_ts = candles[-1]["t"]
-    idempotency_key = jobs.redis_keys.candle_idempotency("BTC/USDT", "1h", str(candle_ts))
+    idempotency_key = jobs.redis_keys.candle_idempotency(
+        "BTC/USDT", settings.timeframe, str(candle_ts)
+    )
     redis_client = FakeRedis(deny_keys={idempotency_key})
 
     result = await jobs.run_cycle(

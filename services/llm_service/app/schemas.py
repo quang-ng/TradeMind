@@ -35,7 +35,9 @@ class PositionContext(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     symbol: Literal["BTC/USDT", "ETH/USDT"]
-    timeframe: Literal["1h"]
+    # "1h" is the intended live-trading cadence (PROJECT.md Section 2.1);
+    # "5m" is the scheduler's demo/dry-run default (SchedulerSettings.timeframe).
+    timeframe: Literal["1h", "5m"]
     candle_close_time: str
     ohlcv: list[Candle]
     indicators: Indicators

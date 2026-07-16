@@ -21,7 +21,7 @@ The system is built on one non-negotiable architectural principle:
 
 The LLM is a pattern-recognition advisor with **zero execution authority**. It never touches exchange credentials, never talks to Binance, never decides how much capital is at risk, and never has a path to bypass the Risk Engine. Every trading decision — even a `BUY` signal with 99% stated confidence — passes through a deterministic Risk Engine that can downgrade it to `HOLD`, resize it, or reject it outright. All decisions, approvals, rejections, and trades are persisted to PostgreSQL as an immutable audit trail.
 
-The MVP targets a single exchange (Binance Spot), two pairs (BTC/USDT, ETH/USDT), one timeframe (1h, closed candles only), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
+The MVP targets a single exchange (Binance Spot), two pairs (BTC/USDT, ETH/USDT), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `5m` for a livelier dry-run/demo, intended to be `1h` for live trading), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
 
 The system fails closed. Whenever any component is uncertain, unavailable, times out, or returns malformed data, the default output is `HOLD` (no new position) — never a best-effort guess.
 
@@ -46,7 +46,7 @@ Explicitly out of scope for the MVP — do not build these unless the scope in S
 - Live trading with real funds (dry-run only).
 - Margin, futures, leverage, or short positions (long-only spot).
 - Multi-exchange support or exchange abstraction beyond what Freqtrade already provides.
-- More than two trading pairs, or timeframes other than 1h.
+- More than two trading pairs, or more than one timeframe active at once (multi-timeframe ensembling/confirmation).
 - Multiple simultaneous LLM providers, ensembling, or model voting.
 - Strategy backtesting/optimization tooling (Freqtrade's own backtesting may be used ad hoc for research, but is not a product feature).
 - Portfolio rebalancing, DCA, grid trading, or any strategy family beyond single-entry/single-exit long positions.
@@ -130,7 +130,7 @@ graph TB
 | Component | Responsibility | Owns | Must Never Do |
 |---|---|---|---|
 | **LLM Analysis Service** | Given market context, return a structured `{action, confidence, reasoning}` opinion | Prompt construction, model invocation, output schema validation | Access Binance or Freqtrade; hold API keys; see account balance/equity; determine position size; retry into a non-`HOLD` fallback |
-| **Scheduler** | Trigger one trading cycle per pair on every closed 1h candle; orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
+| **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `5m`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
 | **Risk Engine** | Sole authority to approve, reject, or resize every signal before execution | Risk rules (Section 9), position sizing, kill switch enforcement, RiskDecision persistence | Execute orders itself (must go through Freqtrade's API); trust LLM confidence/sizing hints without validation |
 | **Freqtrade** | Execute and manage trades against Binance Spot; own stop-loss/ROI enforcement at the exchange-interaction layer | Exchange connectivity, order placement, dry-run wallet simulation, its own internal trade bookkeeping | Originate entry signals (its strategy has no autonomous entry logic in this system); accept commands from anything other than the Risk Engine's authenticated calls |
 | **Binance Spot** | Exchange — source of market data and (in dry-run) simulated order execution | N/A (external) | N/A |
@@ -144,7 +144,7 @@ graph TB
 
 ## 5. Trading Cycle
 
-One full cycle runs independently per symbol, triggered by the Scheduler at each closed 1h candle boundary (plus a fixed settle delay, e.g. `:00 + 15s`, to avoid racing exchange candle finalization).
+One full cycle runs independently per symbol, triggered by the Scheduler at each closed candle boundary for the configured `TIMEFRAME` (plus a fixed settle delay, e.g. `:00 + 15s`, to avoid racing exchange candle finalization). Symbols within a cycle are staggered by `SchedulerSettings.symbol_stagger_seconds` (default 40s) so they don't call the LLM Analysis Service at the same instant — on a single local model, simultaneous calls queue and can blow the analyze timeout.
 
 ### 5.1 Summary
 
@@ -345,7 +345,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `id` | UUID, PK | |
 | `trace_id` | UUID | Correlates to RiskDecision, Order, AuditEvent |
 | `symbol` | text | `BTC/USDT` \| `ETH/USDT` |
-| `timeframe` | text | `1h` (MVP: fixed) |
+| `timeframe` | text | `TIMEFRAME` env var (default `5m`; `1h` for live trading) |
 | `candle_ts` | timestamptz | Close time of the candle this signal was based on |
 | `action` | enum | `BUY` \| `SELL` \| `HOLD` |
 | `confidence` | numeric(3,2) | `0.00`–`1.00`, as reported by the LLM |
@@ -792,7 +792,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 The MVP is complete when all of the following hold:
 
 - [ ] `docker compose up` brings up all services (llm_service, scheduler, risk_engine, freqtrade, admin_api, frontend, notifier, postgres, redis) with no manual steps beyond populating `.env`.
-- [ ] The system runs a cycle for BTC/USDT and ETH/USDT on every closed 1h candle, and only on closed candles (never an in-progress candle).
+- [ ] The system runs a cycle for BTC/USDT and ETH/USDT on every closed `TIMEFRAME` candle, and only on closed candles (never an in-progress candle).
 - [ ] A malformed, timed-out, or schema-invalid LLM response always results in a persisted `Signal(action=HOLD)` and never an exception that skips audit logging.
 - [ ] The Risk Engine rejects any signal that violates a Section 9.1 rule, and the rejection reason is queryable via `GET /decisions`.
 - [ ] Position size, as computed and persisted, never exceeds `max_position_pct` of equity or available free balance, verified by automated tests across randomized account states.

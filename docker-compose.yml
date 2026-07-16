@@ -131,6 +131,7 @@ services:
       POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
       REDIS_URL: redis://redis:6379/0
       LLM_SERVICE_URL: http://llm_service:8000/analyze
+      TIMEFRAME: ${TIMEFRAME:-5m}
       CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
     depends_on:
       migrate:
