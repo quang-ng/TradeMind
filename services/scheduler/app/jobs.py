@@ -13,12 +13,16 @@ from common.db.models import Position, Signal
 from common.db.session import get_session_factory
 from common.enums import Action, PositionStatus, SignalStatus
 from common.llm_config_store import EffectiveLLMConfig, load_effective_llm_config
+from common.sentiment import MarketIndicatorSnapshot, MarketSentiment
 from sqlalchemy import select
 
 from .indicators import compute_indicators
 from .market_data import fetch_closed_candles
+from .sentiment import MarketSentimentService, default_sentiment_providers
 
 logger = logging.getLogger(__name__)
+
+sentiment_service = MarketSentimentService(default_sentiment_providers())
 
 _TIMEFRAME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -96,6 +100,20 @@ async def _run_locked_cycle(
 
     indicators = compute_indicators(pd.DataFrame(candles))
     latest = candles[-1]
+    previous_close = candles[-2]["c"]
+    sentiment = sentiment_service.classify(
+        MarketIndicatorSnapshot(
+            price=latest["c"],
+            price_change_pct=(latest["c"] - previous_close) / previous_close,
+            rsi_14=indicators["rsi_14"],
+            ema_50=indicators["ema_50"],
+            ema_200=indicators["ema_200"],
+            macd=indicators["macd"],
+            atr_14=indicators["atr_14"],
+            volume=latest["v"],
+            volume_sma_20=indicators["volume_sma_20"],
+        )
+    )
     trace_id = uuid.uuid4()
 
     async with session_factory() as session:
@@ -115,6 +133,7 @@ async def _run_locked_cycle(
             candle_ts_ms=candle_ts_ms,
             candles=candles,
             indicators=indicators,
+            sentiment=sentiment,
             has_open_position=has_open_position,
             llm_config=llm_config,
         )
@@ -152,6 +171,7 @@ async def _request_signal(
     candle_ts_ms: int,
     candles: list[dict],
     indicators: dict,
+    sentiment: MarketSentiment,
     has_open_position: bool,
     llm_config: EffectiveLLMConfig,
 ) -> dict:
@@ -181,6 +201,7 @@ async def _request_signal(
             for c in candles[-settings.llm_ohlcv_window :]
         ],
         "indicators": indicators,
+        "sentiment": sentiment.model_dump(mode="json"),
         "position_context": {"has_open_position": has_open_position, "unrealized_pnl_pct": None},
         "provider_override": llm_config.model_dump(),
     }

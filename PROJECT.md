@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Status | Draft — MVP specification |
-| Scope | Binance Spot, BTC/USDT & ETH/USDT, dry-run |
+| Scope | Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT), dry-run |
 | Audience | Coding agents and engineers implementing this system |
 | Authority | This document is the single source of truth. Any implementation decision that conflicts with it must either conform to it or update it first. |
 
@@ -21,7 +21,7 @@ The system is built on one non-negotiable architectural principle:
 
 The LLM is a pattern-recognition advisor with **zero execution authority**. It never touches exchange credentials, never talks to Binance, never decides how much capital is at risk, and never has a path to bypass the Risk Engine. Every trading decision — even a `BUY` signal with 99% stated confidence — passes through a deterministic Risk Engine that can downgrade it to `HOLD`, resize it, or reject it outright. All decisions, approvals, rejections, and trades are persisted to PostgreSQL as an immutable audit trail.
 
-The MVP targets a single exchange (Binance Spot), two pairs (BTC/USDT, ETH/USDT), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `5m` for a livelier dry-run/demo, intended to be `1h` for live trading), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
+The MVP targets a single exchange (Binance Spot), a configurable set of pairs (a `SYMBOLS` env var, comma-separated; defaults to BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see Section 2.1), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `5m` for a livelier dry-run/demo, intended to be `1h` for live trading), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
 
 The system fails closed. Whenever any component is uncertain, unavailable, times out, or returns malformed data, the default output is `HOLD` (no new position) — never a best-effort guess.
 
@@ -32,7 +32,7 @@ The system fails closed. Whenever any component is uncertain, unavailable, times
 ### 2.1 Goals (MVP)
 
 - Run fully self-hosted via Docker Compose, with no dependency on a third-party control plane.
-- Analyze BTC/USDT and ETH/USDT on closed 1-hour candles using one LLM provider.
+- Analyze each configured symbol (`SYMBOLS` env var; default BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT) on closed 1-hour candles using one LLM provider.
 - Enforce a deterministic Risk Engine that has final authority over every trade: sizing, exposure limits, loss limits, cooldowns, and a global kill switch.
 - Execute trades exclusively through Freqtrade, in dry-run mode, against Binance Spot.
 - Persist a complete, queryable audit trail of every signal, decision, and order in PostgreSQL.
@@ -46,7 +46,7 @@ Explicitly out of scope for the MVP — do not build these unless the scope in S
 - Live trading with real funds (dry-run only).
 - Margin, futures, leverage, or short positions (long-only spot).
 - Multi-exchange support or exchange abstraction beyond what Freqtrade already provides.
-- More than two trading pairs, or more than one timeframe active at once (multi-timeframe ensembling/confirmation).
+- More than one timeframe active at once (multi-timeframe ensembling/confirmation). (The symbol count itself is configurable via `SYMBOLS`, not fixed — Section 2.1 — but each additional symbol adds to the Scheduler's per-cycle stagger budget, Section 5.1, and CPU-bound local LLM inference caps how many realistically fit inside one candle period before the stagger guard in `build_scheduler` rejects the configuration.)
 - Multiple simultaneous LLM providers, ensembling, or model voting.
 - Strategy backtesting/optimization tooling (Freqtrade's own backtesting may be used ad hoc for research, but is not a product feature).
 - Portfolio rebalancing, DCA, grid trading, or any strategy family beyond single-entry/single-exit long positions.
@@ -263,7 +263,8 @@ trademind/
 │   │   │   ├── main.py            # APScheduler bootstrap
 │   │   │   ├── jobs.py            # per-symbol cycle job
 │   │   │   ├── market_data.py     # Binance public REST client (ccxt)
-│   │   │   └── indicators.py      # RSI/EMA/MACD/ATR computation
+│   │   │   ├── indicators.py      # RSI/EMA/MACD/ATR computation
+│   │   │   └── sentiment/          # advisory weighted sentiment providers + service
 │   │   ├── Dockerfile
 │   │   └── tests/
 │   ├── risk_engine/
@@ -344,7 +345,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 |---|---|---|
 | `id` | UUID, PK | |
 | `trace_id` | UUID | Correlates to RiskDecision, Order, AuditEvent |
-| `symbol` | text | `BTC/USDT` \| `ETH/USDT` |
+| `symbol` | text | One of the configured `SYMBOLS` (default: `BTC/USDT`, `ETH/USDT`, `BNB/USDT`, `USDC/USDT`, `SOL/USDT`) |
 | `timeframe` | text | `TIMEFRAME` env var (default `5m`; `1h` for live trading) |
 | `candle_ts` | timestamptz | Close time of the candle this signal was based on |
 | `action` | enum | `BUY` \| `SELL` \| `HOLD` |
@@ -492,6 +493,16 @@ The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze
     "atr_14": 780.5,
     "volume_sma_20": 690.2
   },
+  "sentiment": {
+    "score": 25,
+    "state": "FEAR",
+    "confidence": 0.85,
+    "reasons": [
+      "RSI(14) is oversold at 25.0",
+      "Price is below EMA50 and EMA200",
+      "High volatility: ATR is 5.2% of price"
+    ]
+  },
   "position_context": {
     "has_open_position": false,
     "unrealized_pnl_pct": null
@@ -499,7 +510,13 @@ The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze
 }
 ```
 
-`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks the prompt alone exceeding the 60s `/analyze` budget (Section 8.3) before generation even starts. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
+`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks the prompt alone exceeding the 60s `/analyze` budget (Section 8.3) before generation even starts. `sentiment` is deterministic, advisory context computed by the Scheduler's `MarketSentimentService`; it cannot create a signal, size a position, approve risk, or execute a trade. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
+
+### 8.1.1 Market Sentiment Engine
+
+The framework-agnostic sentiment engine converts the latest closed-candle indicators into `FEAR` (0–30), `NEUTRAL` (31–70), or `GREED` (71–100). RSI, EMA trend, MACD, ATR volatility, and volume are independent providers implementing the same interface. A provider returns a score, confidence, and human-readable reason, or `None` when its required inputs are missing. New providers are injected into `MarketSentimentService`; the service itself does not need modification.
+
+Configured weights are keyed by provider name. Aggregation uses `weight × provider confidence` as the effective score weight, so uncertain evidence has less influence. Missing providers are omitted and score weights are renormalized. Overall confidence also measures coverage: it is the configured-weighted mean across all enabled providers, with an unavailable provider contributing zero confidence. If none can evaluate, the safe advisory result is neutral with score `50`, confidence `0.0`, and an explicit missing-data reason. This fallback is context only and does not alter the separate rule that uncertain LLM classification resolves to `HOLD`.
 
 **Fields explicitly excluded from the input, by design** — the LLM must never see or infer from these:
 
@@ -783,7 +800,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 | Phase | Scope | Exit Criteria |
 |---|---|---|
 | **0 — Foundations** | Repo scaffold, `docker-compose.yml` (Postgres, Redis), Alembic init, base FastAPI `/health`, CI (lint + test) | `docker compose up` boots an empty stack; `/health` returns 200; CI green on an empty commit |
-| **1 — Data & LLM Integration** | Market data fetcher, indicator computation, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for both pairs; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
+| **1 — Data & LLM Integration** | Market data fetcher, indicator computation, advisory Market Sentiment Engine, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for both pairs; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
 | **2 — Risk Engine** | All 12 rules (Section 9.1), position sizing, Redis locks/idempotency, Postgres persistence for `Signal`/`RiskDecision`/`AuditEvent` | One passing unit test per rule; a property-based test proves position size never exceeds `max_position_pct` or `free_balance` under randomized inputs |
 | **3 — Freqtrade Execution (dry-run)** | Freqtrade container + `ExternalSignalStrategy`, `forceenter`/`forceexit` integration, webhook receiver, `Order`/`Position` persistence | A manually triggered end-to-end dry-run trade goes from `Signal` → `RiskDecision` → `Order(FILLED)` → `Position(OPEN)`, visible identically in Postgres and the Freqtrade UI |
 | **4 — Admin API, Console & Notifications** | Full endpoint set (Section 11), React operator console, Telegram notifications on every audit event, kill switch wired end-to-end through Administration Zone clients | Operator can fully observe signals, decisions, money, orders, positions, and audit traces and halt trading without SSH/server access |
@@ -796,7 +813,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 The MVP is complete when all of the following hold:
 
 - [ ] `docker compose up` brings up all services (llm_service, scheduler, risk_engine, freqtrade, admin_api, frontend, notifier, postgres, redis) with no manual steps beyond populating `.env`.
-- [ ] The system runs a cycle for BTC/USDT and ETH/USDT on every closed `TIMEFRAME` candle, and only on closed candles (never an in-progress candle).
+- [ ] The system runs a cycle for every symbol in `SYMBOLS` on every closed `TIMEFRAME` candle, and only on closed candles (never an in-progress candle).
 - [ ] A malformed, timed-out, or schema-invalid LLM response always results in a persisted `Signal(action=HOLD)` and never an exception that skips audit logging.
 - [ ] The Risk Engine rejects any signal that violates a Section 9.1 rule, and the rejection reason is queryable via `GET /decisions`.
 - [ ] Position size, as computed and persisted, never exceeds `max_position_pct` of equity or available free balance, verified by automated tests across randomized account states.

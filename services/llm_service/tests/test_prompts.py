@@ -53,3 +53,23 @@ def test_build_user_prompt_unaffected_when_no_override_present():
     request = _base_request()
     prompt = build_user_prompt(request)
     assert json.loads(prompt)["symbol"] == "BTC/USDT"
+
+
+def test_build_user_prompt_includes_advisory_sentiment_when_present():
+    request = _base_request(
+        sentiment={
+            "score": 25,
+            "state": "FEAR",
+            "confidence": 0.85,
+            "reasons": ["RSI(14) is oversold at 25.0"],
+        }
+    )
+
+    parsed = json.loads(build_user_prompt(request))
+
+    assert parsed["sentiment"] == {
+        "score": 25,
+        "state": "FEAR",
+        "confidence": 0.85,
+        "reasons": ["RSI(14) is oversold at 25.0"],
+    }

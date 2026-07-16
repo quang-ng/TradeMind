@@ -35,7 +35,7 @@
         "secret": "${BINANCE_API_SECRET}",
         "ccxt_config": {},
         "ccxt_async_config": {},
-        "pair_whitelist": ["BTC/USDT", "ETH/USDT"],
+        "pair_whitelist": ${PAIR_WHITELIST_JSON},
         "pair_blacklist": []
     },
     "pairlists": [{"method": "StaticPairList"}],

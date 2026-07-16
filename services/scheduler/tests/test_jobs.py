@@ -235,6 +235,8 @@ async def test_run_cycle_forwards_effective_llm_config_as_provider_override(monk
         "ollama_model": "llama3.2:3b",
         "ollama_temperature": 0.9,
     }
+    assert set(body["sentiment"]) == {"score", "state", "confidence", "reasons"}
+    assert body["sentiment"]["state"] in {"FEAR", "NEUTRAL", "GREED"}
 
 
 def _fake_fetch_closed_candles(candles: list[dict]):

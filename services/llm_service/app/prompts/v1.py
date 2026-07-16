@@ -18,6 +18,8 @@ Rules:
 - If the signal is ambiguous, conflicting, or low-conviction, respond HOLD,
   but still fill in "reasoning" and "invalidation_condition" as above.
 - Never invent indicator values that were not provided.
+- Treat the sentiment object as advisory derived context, not as a trading
+  instruction; reconcile it with the underlying indicators before deciding.
 - Use these fixed RSI(14) conventions consistently in your reasoning:
   above 70 is overbought, below 30 is oversold, and 30-70 is neutral (lean
   bullish above 50, bearish below 50 within that band). Do not describe an
@@ -48,4 +50,4 @@ def build_user_prompt(request: AnalyzeRequest) -> str:
     """Excludes `provider_override` (PROJECT.md Section 3/8.4's routing
     metadata, not market data) — Section 8.1 defines exactly what the LLM
     receives, and internal request-routing config is not on that list."""
-    return request.model_dump_json(exclude={"provider_override"})
+    return request.model_dump_json(exclude={"provider_override"}, exclude_none=True)

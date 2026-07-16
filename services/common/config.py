@@ -1,6 +1,8 @@
 from decimal import Decimal
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
@@ -78,10 +80,29 @@ class SchedulerSettings(BaseSettings):
     # full lookback, but the LLM already receives those computed indicators
     # separately (Section 8.1) — it doesn't need 200 raw candles, and on
     # CPU-bound local providers a too-large ohlcv array can make the prompt
-    # alone exceed the 30s /analyze budget (Section 8.3) before generation
+    # alone exceed the 60s /analyze budget (Section 8.3) before generation
     # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
     llm_ohlcv_window: int = 8
-    symbols: list[str] = ["BTC/USDT", "ETH/USDT"]
+    # Comma-separated in the environment (SYMBOLS=BTC/USDT,ETH/USDT,...) via
+    # the validator below, so enabling/disabling a symbol is a .env edit, not
+    # a code change. build_scheduler (main.py) registers one cron job per
+    # entry and requires each to fit within the candle period once staggered
+    # (SchedulerSettings.symbol_stagger_seconds) - remove a symbol from this
+    # list rather than shrinking the stagger if that guard starts rejecting.
+    symbols: Annotated[list[str], NoDecode] = [
+        "BTC/USDT",
+        "ETH/USDT",
+        "BNB/USDT",
+        "USDC/USDT",
+        "SOL/USDT",
+    ]
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def _split_symbols_csv(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [s.strip() for s in value.split(",") if s.strip()]
+        return value
     # Defaults to 5m so a demo/dry-run deployment sees a new signal every few
     # minutes instead of waiting up to 1h. Set TIMEFRAME=1h for live trading
     # (PROJECT.md Section 2.1's intended cadence) — this is a config change,

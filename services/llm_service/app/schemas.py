@@ -1,7 +1,15 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from common.enums import Action, SignalStatus
-from pydantic import BaseModel, Field
+from common.sentiment import MarketSentiment
+from pydantic import BaseModel, Field, StringConstraints
+
+# "BASE/QUOTE" shape only (e.g. "BTC/USDT") — deliberately not a fixed
+# Literal enum of specific coins. The active symbol set lives in one place,
+# SchedulerSettings.symbols (common/config.py, SYMBOLS env var), so enabling
+# or disabling a symbol there never requires a matching schema/code change
+# here.
+SymbolStr = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]+/[A-Z0-9]+$")]
 
 
 class Candle(BaseModel):
@@ -47,13 +55,14 @@ class ProviderOverride(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    symbol: Literal["BTC/USDT", "ETH/USDT"]
+    symbol: SymbolStr
     # "1h" is the intended live-trading cadence (PROJECT.md Section 2.1);
     # "5m" is the scheduler's demo/dry-run default (SchedulerSettings.timeframe).
     timeframe: Literal["1h", "5m"]
     candle_close_time: str
     ohlcv: list[Candle]
     indicators: Indicators
+    sentiment: MarketSentiment | None = None
     position_context: PositionContext
     provider_override: ProviderOverride | None = None
 

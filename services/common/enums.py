@@ -7,6 +7,14 @@ class Action(str, Enum):
     HOLD = "HOLD"
 
 
+class SentimentState(str, Enum):
+    """Advisory market context; it has no trading or risk authority."""
+
+    FEAR = "FEAR"
+    NEUTRAL = "NEUTRAL"
+    GREED = "GREED"
+
+
 class SignalStatus(str, Enum):
     PENDING = "PENDING"
     CONSUMED = "CONSUMED"

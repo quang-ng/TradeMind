@@ -22,17 +22,25 @@ async def _run_scheduled_cycle(symbol: str) -> None:
         logger.exception("scheduled_cycle_failed", extra={"symbol": symbol})
 
 
-def _cron_minute_field(timeframe_seconds: int) -> str | int:
+def _cron_minute_field(timeframe_seconds: int, extra_minutes: int = 0) -> str | int:
     """Every candle period must divide evenly into an hour so the cron fires
-    exactly on candle-close boundaries (e.g. `5m` -> `*/5`, `1h` -> `0`)."""
+    exactly on candle-close boundaries (e.g. `5m` -> `*/5`, `1h` -> `0`).
+
+    `extra_minutes` shifts that pattern later within the hour (e.g. `5m`
+    with `extra_minutes=2` -> `2-59/5`, firing at :02, :07, :12, ...). This
+    is how `build_scheduler` spreads more than ~2 symbols across a whole
+    candle period instead of only within one 60s second-field (see its
+    docstring)."""
     if timeframe_seconds == 3600:
-        return 0
+        return extra_minutes
     minutes, remainder = divmod(timeframe_seconds, 60)
     if remainder or minutes <= 0 or 60 % minutes:
         raise ValueError(
             f"scheduler timeframe must divide evenly into 1h, got {timeframe_seconds}s"
         )
-    return f"*/{minutes}"
+    if extra_minutes == 0:
+        return f"*/{minutes}"
+    return f"{extra_minutes}-59/{minutes}"
 
 
 def build_scheduler(settings: SchedulerSettings | None = None) -> AsyncIOScheduler:
@@ -42,19 +50,24 @@ def build_scheduler(settings: SchedulerSettings | None = None) -> AsyncIOSchedul
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
     )
     timeframe_seconds = timeframe_to_seconds(settings.timeframe)
-    minute_field = _cron_minute_field(timeframe_seconds)
     for index, symbol in enumerate(settings.symbols):
-        # Stagger each symbol's settle second so concurrent cycles don't all
-        # call the LLM service in the same instant (see SchedulerSettings.
+        # Stagger each symbol's fire time so concurrent cycles don't all call
+        # the LLM service in the same instant (see SchedulerSettings.
         # symbol_stagger_seconds) — on a single local model, simultaneous
-        # calls queue and can blow the analyze timeout.
-        second = settings.candle_settle_second + index * settings.symbol_stagger_seconds
-        if second >= min(timeframe_seconds, 60):
+        # calls queue and can blow the analyze timeout. Beyond ~2 symbols the
+        # offset no longer fits inside one 60s second-field, so it's split
+        # into (extra_minutes, second) and the minute field is shifted to
+        # match — this spreads staggered symbols across the whole candle
+        # period rather than requiring them all within one minute.
+        offset_seconds = settings.candle_settle_second + index * settings.symbol_stagger_seconds
+        if offset_seconds >= timeframe_seconds:
             raise ValueError(
-                f"stagger offset for {symbol} ({second}s) overruns the {timeframe_seconds}s "
-                "candle period or the 60s cron second field — reduce symbol_stagger_seconds "
-                "or candle_settle_second"
+                f"stagger offset for {symbol} ({offset_seconds}s) overruns the "
+                f"{timeframe_seconds}s candle period — reduce symbol_stagger_seconds, "
+                "candle_settle_second, or the number of symbols"
             )
+        extra_minutes, second = divmod(offset_seconds, 60)
+        minute_field = _cron_minute_field(timeframe_seconds, extra_minutes)
         scheduler.add_job(
             _run_scheduled_cycle,
             trigger=CronTrigger(

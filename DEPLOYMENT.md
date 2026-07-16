@@ -45,7 +45,9 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml ps
 
 The one-shot `migrate` service runs Alembic after PostgreSQL is healthy.
 Scheduler, Risk Engine, Admin API, and Notifier will not start if migration
-fails. The scheduler runs BTC/USDT and ETH/USDT at `HH:00:15 UTC` by default.
+fails. The scheduler runs each symbol in `SYMBOLS` (default: BTC/USDT, ETH/USDT,
+BNB/USDT, USDC/USDT, SOL/USDT), staggered a few seconds apart starting at
+`HH:00:15 UTC` by default.
 
 Verify the API from the Docker host:
 

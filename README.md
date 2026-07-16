@@ -7,7 +7,7 @@ TradeMind is a self-hosted, AI-assisted cryptocurrency trading platform designed
 The Large Language Model (LLM) analyzes market data and suggests `BUY`, `SELL`, or `HOLD`. It cannot access exchange credentials, execute orders, or determine position size. Every signal is independently checked by a deterministic Risk Engine before an approved order can reach Freqtrade.
 
 > [!IMPORTANT]
-> TradeMind is currently a **draft MVP specification**, not a production-ready trading system. The MVP is limited to Binance Spot, BTC/USDT and ETH/USDT, closed 1-hour candles, long-only positions, and dry-run execution.
+> TradeMind is currently a **draft MVP specification**, not a production-ready trading system. The MVP is limited to Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see `SYMBOLS`), closed 1-hour candles, long-only positions, and dry-run execution.
 
 ## Why TradeMind?
 
@@ -161,7 +161,7 @@ More monitoring commands (logs, Postgres queries, Redis checks, backups) are in 
 | Area | MVP choice |
 |---|---|
 | Exchange | Binance Spot |
-| Pairs | BTC/USDT and ETH/USDT |
+| Pairs | Configurable via `SYMBOLS` (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT) |
 | Timeframe | Closed 1-hour candles |
 | Position type | Long-only spot |
 | Execution | Freqtrade, dry-run only |

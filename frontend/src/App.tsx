@@ -457,12 +457,15 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
 function SignalsPage({ data, onDetail }: { data: DashboardData; onDetail: (detail: Detail) => void }) {
   const [symbol, setSymbol] = useState('ALL')
   const [action, setAction] = useState('ALL')
+  // Derived from the loaded signals rather than a fixed list, so the filter
+  // always matches whichever symbols SYMBOLS actually has configured.
+  const symbolOptions = ['ALL', ...Array.from(new Set(data.signals.map((signal) => signal.symbol))).sort()]
   const signals = data.signals.filter((signal) => (symbol === 'ALL' || signal.symbol === symbol) && (action === 'ALL' || signal.action === action))
   return (
     <div className="page-stack">
       <section className="section-intro"><div><h2>AI signals and risk decisions</h2><p>Every model opinion is recorded. Only deterministic risk approval can produce an order.</p></div><div className="legend"><span><i className="legend-dot llm" /> LLM opinion</span><ArrowRight size={14} /><span><i className="legend-dot risk" /> Risk authority</span></div></section>
       <div className="filters">
-        <Filter label="Market" value={symbol} onChange={setSymbol} options={['ALL', 'BTC/USDT', 'ETH/USDT']} />
+        <Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} />
         <Filter label="Action" value={action} onChange={setAction} options={['ALL', 'BUY', 'SELL', 'HOLD']} />
         <span className="result-count">{signals.length} signals</span>
       </div>
@@ -510,6 +513,9 @@ function SignalCard({ signal, decision, order, onDetail }: { signal: Signal; dec
 function OrdersPage({ orders, onTrace }: { orders: Order[]; onTrace: (id: string) => void }) {
   const [status, setStatus] = useState('ALL')
   const [symbol, setSymbol] = useState('ALL')
+  // Derived from the loaded orders rather than a fixed list, so the filter
+  // always matches whichever symbols SYMBOLS actually has configured.
+  const symbolOptions = ['ALL', ...Array.from(new Set(orders.map((order) => order.symbol))).sort()]
   const filtered = orders.filter((order) => (status === 'ALL' || order.status === status) && (symbol === 'ALL' || order.symbol === symbol))
   const volume = orders.reduce(
     (sum, order) => sum + Number(order.filled_amount ?? 0) * Number(order.avg_price ?? 0),
@@ -523,7 +529,7 @@ function OrdersPage({ orders, onTrace }: { orders: Order[]; onTrace: (id: string
         <MetricCard label="Execution issues" value={String(orders.filter((o) => o.status === 'FAILED' || o.status === 'CANCELLED').length)} note="Failed or cancelled" icon={<AlertTriangle />} tone={orders.some((o) => o.status === 'FAILED') ? 'negative' : undefined} />
       </section>
       <Panel title="Order ledger" subtitle="Authoritative TradeMind order records—not Freqtrade’s internal database">
-        <div className="panel-filters"><Filter label="Market" value={symbol} onChange={setSymbol} options={['ALL', 'BTC/USDT', 'ETH/USDT']} /><Filter label="Status" value={status} onChange={setStatus} options={['ALL', 'SUBMITTED', 'FILLED', 'FAILED', 'CANCELLED']} /></div>
+        <div className="panel-filters"><Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} /><Filter label="Status" value={status} onChange={setStatus} options={['ALL', 'SUBMITTED', 'FILLED', 'FAILED', 'CANCELLED']} /></div>
         <div className="table-scroll">
           <table><thead><tr><th>Order</th><th>Market</th><th>Side</th><th>Status</th><th>Requested amount</th><th>Filled amount</th><th>Average price</th><th>Time</th><th /></tr></thead>
             <tbody>{filtered.map((order) => <tr key={order.id}>
@@ -751,9 +757,11 @@ function MetricCard({ label, value, note, icon, tone }: { label: string; value: 
   return <article className={`metric-card ${tone ?? ''}`}><div className="metric-top"><span>{label}</span><i>{icon}</i></div><strong>{value}</strong><p>{note}</p></article>
 }
 
+const COIN_GLYPHS: Record<string, string> = { BTC: '₿', ETH: 'Ξ', BNB: 'B', USDC: '$', SOL: 'S' }
+
 function Coin({ symbol, small = false }: { symbol: string; small?: boolean }) {
-  const btc = symbol.startsWith('BTC')
-  return <span className={`coin ${btc ? 'btc' : 'eth'} ${small ? 'small' : ''}`}>{btc ? '₿' : 'Ξ'}</span>
+  const base = symbol.split('/')[0]
+  return <span className={`coin ${base.toLowerCase()} ${small ? 'small' : ''}`}>{COIN_GLYPHS[base] ?? base.slice(0, 1)}</span>
 }
 
 function ActionBadge({ action, large = false }: { action: Action | null; large?: boolean }) {
