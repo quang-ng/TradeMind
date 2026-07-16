@@ -39,3 +39,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Each few-shot JSON example must stay on one physical line - a real line
+# break inside the string would embed a literal newline the model could
+# imitate, producing invalid JSON (see git history for the incident).
+"services/llm_service/app/prompts/v1.py" = ["E501"]
