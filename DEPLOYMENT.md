@@ -64,6 +64,39 @@ same VPN or TLS reverse proxy used for administrative access. Keep the
 loopback-only Compose binding and do not publish the console or Admin API
 directly to the internet.
 
+### Optional public-IP access (dry-run evaluation only)
+
+If a domain, VPN, or SSH tunnel is not available, the explicit public overlay
+publishes only the operator console on all IPv4 interfaces:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
+  -f docker-compose.public.yml \
+  up -d --build
+```
+
+Equivalently, run `make up-public`. Allow TCP port 3000 in both the VPS host
+firewall and the provider's security group, then open
+`http://VPS_PUBLIC_IP:3000`. Verify that only the frontend is public:
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.production.yml \
+  -f docker-compose.public.yml \
+  ps
+sudo ss -lntp | grep ':3000'
+```
+
+The frontend should show `0.0.0.0:3000->80/tcp`. The Admin API must remain
+bound to `127.0.0.1:8000`; PostgreSQL, Redis, Freqtrade, the LLM service, and
+Ollama must have no public host binding. This mode uses plain HTTP, so the
+bearer API key is not protected from network interception. Use a long random
+`ADMIN_API_KEY`, keep `DRY_RUN=true`, and move to encrypted access before any
+non-evaluation use.
+
 ## Release procedure
 
 1. Enable the kill switch.

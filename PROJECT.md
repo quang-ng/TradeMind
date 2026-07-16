@@ -50,7 +50,7 @@ Explicitly out of scope for the MVP — do not build these unless the scope in S
 - Multiple simultaneous LLM providers, ensembling, or model voting.
 - Strategy backtesting/optimization tooling (Freqtrade's own backtesting may be used ad hoc for research, but is not a product feature).
 - Portfolio rebalancing, DCA, grid trading, or any strategy family beyond single-entry/single-exit long positions.
-- A multi-user public web application or mobile app. The browser console is a single-operator Administration Zone client and is never exposed directly to the public internet.
+- A multi-user public web application or mobile app. The browser console remains a single-operator Administration Zone client; an explicit dry-run-only Compose overlay may publish its login surface by public IP, but this does not make TradeMind a public or multi-tenant product.
 - Fully autonomous operation without a human-operable kill switch.
 - Horizontal scaling / multi-tenant deployment (single operator, single deployment).
 
@@ -720,7 +720,7 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 
 ## 11. API Overview
 
-Single-operator, self-hosted deployment: authentication is a static API key (`ADMIN_API_KEY`) passed as a bearer token. Not designed for multi-tenant or public exposure — intended to sit behind a VPN/reverse-proxy with TLS if exposed beyond localhost.
+Single-operator, self-hosted deployment: authentication is a static API key (`ADMIN_API_KEY`) passed as a bearer token. Not designed for multi-tenant use. The default deployment is intended to sit behind a VPN/reverse-proxy with TLS if exposed beyond localhost. `docker-compose.public.yml` is an explicit, dry-run-evaluation-only exception that publishes the frontend on public TCP port 3000 while leaving every backend service private; because it uses plain HTTP, it is not appropriate for live funds or long-term operation.
 
 The React Operator Console is served on host loopback port `3000` by default and calls these endpoints only through its same-origin `/api` reverse proxy. The operator enters `ADMIN_API_KEY` at session start; the key is held in browser `sessionStorage`, is not persisted across browser sessions, and is never injected into or built into the frontend container. The console observes the resources below and invokes only the existing Administration Zone controls. It has no direct execution endpoint or path to Freqtrade.
 

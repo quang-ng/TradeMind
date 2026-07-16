@@ -105,6 +105,11 @@ The console and Admin API bind to host loopback by default. Use a VPN or TLS
 reverse proxy for remote access; do not publish either service directly to
 the internet.
 
+For temporary public-IP access during dry-run evaluation, the repository also
+contains `docker-compose.public.yml`. It exposes only the frontend at
+`http://VPS_PUBLIC_IP:3000`; see [DEPLOYMENT.md](DEPLOYMENT.md) for the full
+command, firewall checks, and the plain-HTTP security warning.
+
 ### Admin API (port 8000)
 
 ```bash

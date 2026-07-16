@@ -1,7 +1,10 @@
-.PHONY: up down test lint migrate frontend-test frontend-lint frontend-build
+.PHONY: up up-public down test lint migrate frontend-test frontend-lint frontend-build
 
 up:
 	docker compose up -d --build
+
+up-public:
+	docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.public.yml up -d --build
 
 down:
 	docker compose down

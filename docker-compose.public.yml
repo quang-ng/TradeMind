@@ -1,0 +1,18 @@
+# Optional public-IP overlay for dry-run evaluation without a domain.
+#
+# Usage:
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.production.yml \
+#     -f docker-compose.public.yml \
+#     up -d --build
+#
+# This replaces the frontend's loopback-only binding. All backend ports keep
+# their production bindings: the Admin API remains on host loopback and is
+# reachable by the browser only through the frontend's authenticated /api
+# proxy. Plain HTTP does not encrypt ADMIN_API_KEY; prefer a VPN, SSH tunnel,
+# or TLS reverse proxy for anything beyond temporary dry-run evaluation.
+services:
+  frontend:
+    ports: !override
+      - "0.0.0.0:3000:80"
