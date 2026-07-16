@@ -167,7 +167,7 @@ async def _request_signal(
                 "c": c["c"],
                 "v": c["v"],
             }
-            for c in candles
+            for c in candles[-settings.llm_ohlcv_window :]
         ],
         "indicators": indicators,
         "position_context": {"has_open_position": has_open_position, "unrealized_pnl_pct": None},

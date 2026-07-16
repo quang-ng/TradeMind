@@ -66,6 +66,13 @@ class SchedulerSettings(BaseSettings):
     llm_request_timeout_seconds: float = 35.0
     timeframe: str = "1h"
     candle_lookback: int = 200
+    # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
+    # full lookback, but the LLM already receives those computed indicators
+    # separately (Section 8.1) — it doesn't need 200 raw candles, and on
+    # CPU-bound local providers a too-large ohlcv array can make the prompt
+    # alone exceed the 30s /analyze budget (Section 8.3) before generation
+    # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
+    llm_ohlcv_window: int = 30
     symbols: list[str] = ["BTC/USDT", "ETH/USDT"]
     candle_settle_second: int = 15
     scheduler_health_port: int = 8000
