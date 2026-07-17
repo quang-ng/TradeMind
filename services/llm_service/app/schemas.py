@@ -57,8 +57,9 @@ class ProviderOverride(BaseModel):
 class AnalyzeRequest(BaseModel):
     symbol: SymbolStr
     # "1h" is the intended live-trading cadence (PROJECT.md Section 2.1);
-    # "5m" is the scheduler's demo/dry-run default (SchedulerSettings.timeframe).
-    timeframe: Literal["1h", "5m"]
+    # "30m" is the scheduler's current default (SchedulerSettings.timeframe);
+    # "5m" remains for backwards compatibility with older persisted signals.
+    timeframe: Literal["1h", "30m", "5m"]
     candle_close_time: str
     ohlcv: list[Candle]
     indicators: Indicators

@@ -140,3 +140,27 @@ def test_suppresses_model_sell_when_rubric_passes_but_pnl_is_unknown():
 
     assert result.output.action == Action.HOLD
     assert result.action_changed is True
+
+
+def test_suppresses_model_sell_when_profit_does_not_clear_minimum_margin():
+    """Barely positive isn't enough — analyze latency + forceexit slippage
+    can flip a razor-thin gain into a net loss after round-trip fees."""
+    result = validate_signal_semantics(
+        _request(has_open_position=True, bearish=True, unrealized_pnl_pct=0.002),
+        _output(Action.SELL),
+        min_exit_profit_pct=0.005,
+    )
+
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is True
+
+
+def test_allows_sell_once_profit_clears_the_configured_margin():
+    result = validate_signal_semantics(
+        _request(has_open_position=True, bearish=True, unrealized_pnl_pct=0.01),
+        _output(Action.HOLD),
+        min_exit_profit_pct=0.005,
+    )
+
+    assert result.output.action == Action.SELL
+    assert result.action_changed is True

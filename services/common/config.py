@@ -27,10 +27,18 @@ class LLMServiceSettings(BaseSettings):
     # RSI/EMA/MACD values and copied prompt phrases into false BUY signals.
     ollama_model: str = "qwen2.5:7b"
     ollama_temperature: float = 0.4
+    # The exit rubric (semantic_validator.py) only locks in gains, never cuts
+    # losses — but "profitable" must mean more than literally > 0. Analyze
+    # latency plus forceexit execution slippage can turn a marginally
+    # positive unrealized_pnl_pct at decision time into a net loss by fill
+    # time once round-trip fees are counted. Require a cushion above that.
+    min_exit_profit_pct: float = 0.005
     # The bounded timeout remains a fail-closed backstop for unusually slow
     # local inference; the Scheduler staggers normal requests within each
-    # five-minute candle period.
-    analyze_timeout_seconds: float = 180.0
+    # thirty-minute candle period, which leaves plenty of room above 180s
+    # for a CPU-bound model (e.g. llama3.2:3b) without risking overlap into
+    # the next candle's cycle.
+    analyze_timeout_seconds: float = 300.0
 
 
 class RedisSettings(BaseSettings):
@@ -56,7 +64,13 @@ class RiskConfig(BaseSettings):
     max_daily_loss_pct: Decimal = Decimal("0.03")
     consecutive_loss_limit: int = 3
     cooldown_minutes: int = 120
-    min_confidence: Decimal = Decimal("0.65")
+    # Raised from 0.65: the exit rubric's confidence is deterministic
+    # (0.65 + 0.05 per confirmation past 3, capped at 0.80 — see
+    # semantic_validator.py) and untouched by this rule (exit_evaluator.py
+    # runs no confidence check), so this only tightens entries. 0.70 filters
+    # the weakest 3-confirmation BUYs while still admitting anything with
+    # either a 4th confirmation or genuine model conviction.
+    min_confidence: Decimal = Decimal("0.70")
     signal_max_age_minutes: int = 10
     atr_stop_multiplier: Decimal = Decimal("2.0")
     min_stop_loss_pct: Decimal = Decimal("0.015")
@@ -73,9 +87,9 @@ class SchedulerSettings(BaseSettings):
 
     llm_service_url: str = "http://localhost:8001/analyze"
     # Must stay a few seconds above LLMServiceSettings.analyze_timeout_seconds
-    # (180s) so the service's own timeout fires first and returns a HOLD
+    # (300s) so the service's own timeout fires first and returns a HOLD
     # signal, rather than this HTTP client cutting the connection early.
-    llm_request_timeout_seconds: float = 185.0
+    llm_request_timeout_seconds: float = 305.0
     candle_lookback: int = 200
     # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
     # full lookback, but the LLM already receives those computed indicators

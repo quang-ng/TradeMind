@@ -67,7 +67,9 @@ async def analyze(
             request, reason=exc.reason, model_name=model_name, raw_response={"raw": raw_text}
         )
 
-    semantic_result = validate_signal_semantics(request, output)
+    semantic_result = validate_signal_semantics(
+        request, output, min_exit_profit_pct=settings.min_exit_profit_pct
+    )
     raw_response = {
         "raw": raw_text,
         "model_action": output.action.value,

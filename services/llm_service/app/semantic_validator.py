@@ -13,7 +13,7 @@ class SemanticValidationResult:
 
 
 def validate_signal_semantics(
-    request: AnalyzeRequest, output: LLMOutput
+    request: AnalyzeRequest, output: LLMOutput, *, min_exit_profit_pct: float = 0.005
 ) -> SemanticValidationResult:
     """Enforce the position-aware exit rubric after schema validation.
 
@@ -26,16 +26,17 @@ def validate_signal_semantics(
     state.
 
     The rubric only ever forces a profit-taking exit, never a loss-cutting
-    one: `unrealized_pnl_pct` must be a known positive value, or the
-    confirmations are ignored and the position is left to HOLD. Without this
-    gate, three bearish confirmations firing moments after entry would force
-    a SELL that locks in a loss dominated by round-trip fees rather than any
-    real reversal.
+    one: `unrealized_pnl_pct` must clear `min_exit_profit_pct`, or the
+    confirmations are ignored and the position is left to HOLD. A bare
+    `> 0` isn't enough — analyze latency plus forceexit execution slippage
+    can turn a marginally positive reading at decision time into a net loss
+    by fill time once round-trip fees are counted, so the threshold must
+    leave a cushion above that, not just above breakeven.
     """
     has_open_position = request.position_context.has_open_position
     is_profitable = (
         request.position_context.unrealized_pnl_pct is not None
-        and request.position_context.unrealized_pnl_pct > 0
+        and request.position_context.unrealized_pnl_pct > min_exit_profit_pct
     )
     confirmations = _bearish_exit_confirmations(request) if has_open_position else ()
     rubric_satisfied = has_open_position and is_profitable and len(confirmations) >= 3
@@ -78,8 +79,9 @@ def validate_signal_semantics(
         reason = "SELL suppressed because there is no open position."
     elif not is_profitable:
         reason = (
-            "Trade action suppressed because the position is not currently profitable "
-            "— the deterministic exit rubric only locks in gains, it does not cut losses."
+            "Trade action suppressed because the position does not clear the minimum "
+            f"exit profit margin ({min_exit_profit_pct:.2%}) — the deterministic exit "
+            "rubric only locks in gains net of expected slippage/fees, it does not cut losses."
         )
     else:
         reason = (
