@@ -18,10 +18,17 @@ def _output(action: Action) -> LLMOutput:
     )
 
 
-def _request(*, has_open_position: bool, bearish: bool) -> AnalyzeRequest:
+_UNSET_PNL = object()
+
+
+def _request(
+    *, has_open_position: bool, bearish: bool, unrealized_pnl_pct=_UNSET_PNL
+) -> AnalyzeRequest:
     if bearish:
         payload = json.loads((FIXTURES / "regression_bearish_open.json").read_text())
         payload["position_context"]["has_open_position"] = has_open_position
+        if unrealized_pnl_pct is not _UNSET_PNL:
+            payload["position_context"]["unrealized_pnl_pct"] = unrealized_pnl_pct
         return AnalyzeRequest.model_validate(payload)
 
     return AnalyzeRequest(
@@ -99,3 +106,37 @@ def test_suppresses_model_sell_with_fewer_than_three_confirmations():
     assert result.output.action == Action.HOLD
     assert result.action_changed is True
     assert result.output.confidence <= 0.64
+
+
+def test_keeps_hold_when_bearish_rubric_passes_but_position_is_not_profitable():
+    result = validate_signal_semantics(
+        _request(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.025),
+        _output(Action.HOLD),
+    )
+
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is False
+
+
+def test_suppresses_model_sell_when_rubric_passes_but_position_is_not_profitable():
+    """The rubric only ever locks in gains — it must never force an exit
+    that realizes a loss, even when the model itself proposes SELL and every
+    bearish confirmation agrees."""
+    result = validate_signal_semantics(
+        _request(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.025),
+        _output(Action.SELL),
+    )
+
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is True
+    assert result.output.confidence <= 0.64
+
+
+def test_suppresses_model_sell_when_rubric_passes_but_pnl_is_unknown():
+    result = validate_signal_semantics(
+        _request(has_open_position=True, bearish=True, unrealized_pnl_pct=None),
+        _output(Action.SELL),
+    )
+
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is True

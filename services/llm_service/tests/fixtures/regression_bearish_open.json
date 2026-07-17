@@ -16,7 +16,7 @@
     "atr_14": 338.38,
     "volume_sma_20": 846.39
   },
-  "position_context": {"has_open_position": true, "unrealized_pnl_pct": -0.025},
+  "position_context": {"has_open_position": true, "unrealized_pnl_pct": 0.015},
   "provider_override": {
     "llm_provider": "ollama",
     "ollama_model": "qwen2.5:7b",

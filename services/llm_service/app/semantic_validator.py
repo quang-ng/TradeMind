@@ -24,22 +24,37 @@ def validate_signal_semantics(
     returning HOLD while its own supplied evidence satisfies the SELL rubric,
     or from proposing an action that is impossible in the current position
     state.
+
+    The rubric only ever forces a profit-taking exit, never a loss-cutting
+    one: `unrealized_pnl_pct` must be a known positive value, or the
+    confirmations are ignored and the position is left to HOLD. Without this
+    gate, three bearish confirmations firing moments after entry would force
+    a SELL that locks in a loss dominated by round-trip fees rather than any
+    real reversal.
     """
     has_open_position = request.position_context.has_open_position
+    is_profitable = (
+        request.position_context.unrealized_pnl_pct is not None
+        and request.position_context.unrealized_pnl_pct > 0
+    )
     confirmations = _bearish_exit_confirmations(request) if has_open_position else ()
+    rubric_satisfied = has_open_position and is_profitable and len(confirmations) >= 3
 
-    if has_open_position and len(confirmations) >= 3:
+    if rubric_satisfied:
         normalized = output.model_copy(
             update={
                 "action": Action.SELL,
                 "confidence": min(0.80, 0.65 + 0.05 * (len(confirmations) - 3)),
                 "reasoning": (
                     f"Deterministic exit rubric found {len(confirmations)} independent "
-                    f"bearish confirmations: {', '.join(confirmations)}."
+                    f"bearish confirmations while the position was profitable "
+                    f"({request.position_context.unrealized_pnl_pct:.2%}): "
+                    f"{', '.join(confirmations)}."
                 ),
                 "key_indicators": list(confirmations),
                 "invalidation_condition": (
-                    "Fewer than three independent bearish confirmations on a closed candle."
+                    "Fewer than three independent bearish confirmations on a closed "
+                    "candle, or the position is no longer profitable."
                 ),
             }
         )
@@ -59,14 +74,18 @@ def validate_signal_semantics(
             exit_confirmations=confirmations,
         )
 
-    reason = (
-        "SELL suppressed because there is no open position."
-        if not has_open_position
-        else (
+    if not has_open_position:
+        reason = "SELL suppressed because there is no open position."
+    elif not is_profitable:
+        reason = (
+            "Trade action suppressed because the position is not currently profitable "
+            "— the deterministic exit rubric only locks in gains, it does not cut losses."
+        )
+    else:
+        reason = (
             "Trade action suppressed because only "
             f"{len(confirmations)} independent bearish exit confirmations were present."
         )
-    )
     normalized = output.model_copy(
         update={
             "action": Action.HOLD,
@@ -74,7 +93,8 @@ def validate_signal_semantics(
             "reasoning": reason,
             "key_indicators": list(confirmations),
             "invalidation_condition": (
-                "At least three independent bearish confirmations while a position is open."
+                "At least three independent bearish confirmations while the position "
+                "is open and profitable."
             ),
         }
     )

@@ -40,11 +40,15 @@ Decision rubric — follow it in this order:
    RSI between 50 and 70; recent closes making higher highs/lows; and latest
    volume above volume_sma_20. If fewer than three agree, return HOLD.
 3. When has_open_position is true, return SELL when at least three independent
-   bearish exit confirmations agree. Useful confirmations are: latest close
-   below EMA50 and EMA200; EMA50 below EMA200; negative MACD histogram with
-   MACD below its signal; RSI below 45; recent closes making lower highs/lows;
-   and falling price on latest volume above volume_sma_20. Exits reduce risk,
-   so do not wait for RSI below 30. If fewer than three agree, return HOLD.
+   bearish exit confirmations agree AND position_context.unrealized_pnl_pct is
+   positive. Useful confirmations are: latest close below EMA50 and EMA200;
+   EMA50 below EMA200; negative MACD histogram with MACD below its signal;
+   RSI below 45; recent closes making lower highs/lows; and falling price on
+   latest volume above volume_sma_20. This rubric locks in gains ahead of a
+   reversal — it does not stop losses, so a position that is not currently
+   profitable stays HOLD regardless of how many bearish confirmations agree.
+   If fewer than three confirmations agree, or the position is not
+   profitable, return HOLD.
 4. Count only facts supported by distinct supplied fields. Sentiment does not
    count as a confirmation, ATR is volatility rather than direction, and the
    same EMA relationship must not be counted twice.

@@ -117,13 +117,19 @@ async def _run_locked_cycle(
     trace_id = uuid.uuid4()
 
     async with session_factory() as session:
-        has_open_position = (
+        open_position = (
             await session.execute(
-                select(Position.id).where(
+                select(Position).where(
                     Position.symbol == symbol, Position.status == PositionStatus.OPEN.value
                 )
             )
-        ).first() is not None
+        ).scalars().first()
+        has_open_position = open_position is not None
+        unrealized_pnl_pct = (
+            float((Decimal(str(latest["c"])) - open_position.entry_price) / open_position.entry_price)
+            if open_position is not None
+            else None
+        )
 
         llm_config = await load_effective_llm_config(session)
         payload = _build_analyze_payload(
@@ -134,6 +140,7 @@ async def _run_locked_cycle(
             indicators=indicators,
             sentiment=sentiment,
             has_open_position=has_open_position,
+            unrealized_pnl_pct=unrealized_pnl_pct,
             llm_config=llm_config,
         )
         llm_result = await _post_analyze(http_client, settings, payload)
@@ -173,6 +180,7 @@ def _build_analyze_payload(
     indicators: dict,
     sentiment: MarketSentiment,
     has_open_position: bool,
+    unrealized_pnl_pct: float | None,
     llm_config: EffectiveLLMConfig,
 ) -> dict:
     """Builds the exact `/analyze` request body (PROJECT.md Section 8.1).
@@ -199,7 +207,10 @@ def _build_analyze_payload(
         ],
         "indicators": indicators,
         "sentiment": sentiment.model_dump(mode="json"),
-        "position_context": {"has_open_position": has_open_position, "unrealized_pnl_pct": None},
+        "position_context": {
+            "has_open_position": has_open_position,
+            "unrealized_pnl_pct": unrealized_pnl_pct,
+        },
         "provider_override": llm_config.model_dump(),
     }
 

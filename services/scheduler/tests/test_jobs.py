@@ -1,5 +1,6 @@
 import json
 import uuid
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -50,9 +51,20 @@ class FakeRedis:
         pass
 
 
+class FakePosition:
+    def __init__(self, entry_price: Decimal):
+        self.entry_price = entry_price
+
+
 class FakeResult:
+    def __init__(self, position=None):
+        self._position = position
+
     def first(self):
-        return None  # no open position
+        return self._position
+
+    def scalars(self):
+        return self
 
 
 class FakeLLMConfigState:
@@ -61,12 +73,13 @@ class FakeLLMConfigState:
 
 
 class FakeSession:
-    def __init__(self, llm_config_overrides: dict | None = None):
+    def __init__(self, llm_config_overrides: dict | None = None, open_position=None):
         self.added: list = []
         self._llm_config_overrides = llm_config_overrides
+        self._open_position = open_position
 
     async def execute(self, _stmt):
-        return FakeResult()
+        return FakeResult(self._open_position)
 
     async def get(self, _model, _pk):
         if self._llm_config_overrides is None:
@@ -215,6 +228,40 @@ async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeyp
     assert trace_id is not None
     signal_row = captured_session.added[0]
     assert signal_row.action == "HOLD"
+
+
+async def test_run_cycle_computes_unrealized_pnl_pct_for_open_position(monkeypatch, settings):
+    """The LLM's deterministic exit rubric (semantic_validator.py) only fires
+    when the position is profitable, so the Scheduler must forward the real
+    unrealized PnL rather than the previously hardcoded `None`."""
+    candles = _candles(25)
+    monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
+    redis_client = FakeRedis()
+    open_position = FakePosition(entry_price=Decimal("100.0"))
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json=LLM_PAYLOAD)
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    trace_id = await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=lambda: FakeSession(open_position=open_position),
+        http_client=http_client,
+        settings=settings,
+    )
+
+    assert trace_id is not None
+    body = json.loads(captured_requests[0].content)
+    latest_close = candles[-1]["c"]
+    expected_pnl_pct = (latest_close - 100.0) / 100.0
+    assert body["position_context"] == {
+        "has_open_position": True,
+        "unrealized_pnl_pct": pytest.approx(expected_pnl_pct),
+    }
 
 
 async def test_run_cycle_forwards_effective_llm_config_as_provider_override(monkeypatch, settings):
