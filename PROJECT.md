@@ -349,10 +349,10 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `timeframe` | text | `TIMEFRAME` env var (default `5m`) |
 | `candle_ts` | timestamptz | Close time of the candle this signal was based on |
 | `action` | enum | `BUY` \| `SELL` \| `HOLD` |
-| `confidence` | numeric(3,2) | `0.00`–`1.00`, as reported by the LLM |
-| `reasoning` | text | Truncated to 500 chars |
+| `confidence` | numeric(3,2) | `0.00`–`1.00`; model-reported unless the deterministic exit semantic validator normalizes the action (Section 8.3) |
+| `reasoning` | text | Truncated to 500 chars; deterministic exit evidence replaces contradictory model reasoning when Section 8.3 normalizes an action |
 | `model_name` | text | e.g. `provider:model-version` |
-| `raw_response` | jsonb | Full LLM response for audit/debugging |
+| `raw_response` | jsonb | Full LLM response plus original/normalized action and deterministic exit-confirmation metadata for audit/debugging |
 | `model_input` | jsonb, nullable | The exact `/analyze` request body this signal was produced from (Section 8.1 shape: `ohlcv`, `indicators`, `sentiment`, `position_context`), minus `provider_override`. Nullable because rows created before this field was added have none |
 | `price` | numeric | Close price of `candle_ts`. Added in Phase 2: the Section 9.2 sizing formula needs the entry price that produced this signal, and this is the only place it survives past the LLM call |
 | `atr_14` | numeric | ATR(14) at `candle_ts`, same rationale as `price` — Section 9.2's stop-distance calculation is not derivable without it |
@@ -511,7 +511,7 @@ The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze
 }
 ```
 
-`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks consuming the entire bounded `/analyze` budget (Section 8.3) before generation starts. `sentiment` is deterministic, advisory context computed by the Scheduler's `MarketSentimentService`; it cannot create a signal, size a position, approve risk, or execute a trade. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
+`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 4), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Four candles preserve enough context to evaluate the rubric's three-candle higher/lower-highs-and-lows pattern while keeping the CPU-only `qwen2.5:7b` request small enough for the four-symbol, five-minute stagger budget. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks consuming the entire bounded `/analyze` budget (Section 8.3) before generation starts. `sentiment` is deterministic, advisory context computed by the Scheduler's `MarketSentimentService`; it cannot create a signal, size a position, approve risk, or execute a trade. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
 
 ### 8.1.1 Market Sentiment Engine
 
@@ -550,13 +550,20 @@ Configured weights are keyed by provider name. Aggregation uses `weight × provi
 
 ### 8.3 Validation pipeline (`validators.py`)
 
-Executed on every model response, in order. The first failure short-circuits to `HOLD`:
+Executed on every model response, in order. The first structural failure short-circuits to `HOLD`:
 
 1. Response is valid JSON.
 2. Response conforms to the JSON Schema above (required fields present, correct types).
 3. `action` is one of the three allowed enum values.
 4. `confidence` is within `[0.0, 1.0]`.
 5. `reasoning` length is within bounds.
+
+After structural validation, `semantic_validator.py` deterministically enforces the position-aware exit rubric using only the supplied closed candles and indicators. Provider failures and structurally invalid responses never reach this step and remain `HOLD`. For a valid response:
+
+- With no open position, a model-proposed `SELL` is normalized to `HOLD`.
+- With an open position, `SELL` requires at least three distinct confirmations from the same list encoded in the prompt: price below EMA50 and EMA200; EMA50 below EMA200; bearish MACD (negative histogram and MACD below signal); RSI below 45; lower highs and lower lows across the latest three candles; falling close on volume above SMA20.
+- When at least three confirmations exist, the output is normalized to `SELL` even if the model returned `HOLD` or `BUY`. When fewer exist, a model-proposed `SELL` or impossible duplicate `BUY` is normalized to `HOLD`.
+- The raw model response, original action, normalized action, and counted confirmations are all retained in `raw_response`. This is deterministic contract validation inside the isolated analysis service, not execution authority: the resulting `SELL` still passes through Section 9.1.1 and only the Risk Engine may call Freqtrade.
 
 | Failure mode | Behavior |
 |---|---|

@@ -187,6 +187,7 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
         "position_context",
     }
     assert "provider_override" not in signal_row.model_input
+    assert len(signal_row.model_input["ohlcv"]) == 4
 
 
 async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeypatch, settings):

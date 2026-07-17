@@ -83,7 +83,7 @@ class SchedulerSettings(BaseSettings):
     # CPU-bound local providers a too-large ohlcv array can consume the entire
     # /analyze budget (Section 8.3) before generation
     # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
-    llm_ohlcv_window: int = 8
+    llm_ohlcv_window: int = 4
     # Comma-separated in the environment (SYMBOLS=BTC/USDT,ETH/USDT,...) via
     # the validator below, so enabling/disabling a symbol is a .env edit, not
     # a code change. build_scheduler (main.py) registers one cron job per

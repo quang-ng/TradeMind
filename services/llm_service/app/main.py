@@ -9,6 +9,7 @@ from .prompts.v1 import SYSTEM_PROMPT_V1, build_user_prompt
 from .providers import get_provider
 from .providers.base import Provider
 from .schemas import AnalyzeRequest, ProviderOverride, Signal
+from .semantic_validator import validate_signal_semantics
 from .validators import ValidationFailure, build_hold_signal, build_signal, parse_llm_response
 
 configure_json_logging()
@@ -66,7 +67,26 @@ async def analyze(
             request, reason=exc.reason, model_name=model_name, raw_response={"raw": raw_text}
         )
 
-    return build_signal(request, output, model_name=model_name, raw_response={"raw": raw_text})
+    semantic_result = validate_signal_semantics(request, output)
+    raw_response = {
+        "raw": raw_text,
+        "model_action": output.action.value,
+        "semantic_action": semantic_result.output.action.value,
+        "exit_confirmations": list(semantic_result.exit_confirmations),
+    }
+    if semantic_result.action_changed:
+        logger.info(
+            "llm_action_semantically_normalized",
+            extra={
+                "symbol": request.symbol,
+                "model_action": output.action.value,
+                "semantic_action": semantic_result.output.action.value,
+                "exit_confirmations": list(semantic_result.exit_confirmations),
+            },
+        )
+    return build_signal(
+        request, semantic_result.output, model_name=model_name, raw_response=raw_response
+    )
 
 
 async def _call_provider_with_retry(

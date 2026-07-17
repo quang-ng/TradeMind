@@ -136,6 +136,7 @@ services:
       CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
       SYMBOL_STAGGER_SECONDS: ${SYMBOL_STAGGER_SECONDS:-70}
       LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-185}
+      LLM_OHLCV_WINDOW: ${LLM_OHLCV_WINDOW:-4}
       # Comma-separated (common/config.py's SchedulerSettings splits it) —
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
       # services never disagree on which symbols are actually tradable.
