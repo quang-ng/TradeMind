@@ -21,7 +21,7 @@ The system is built on one non-negotiable architectural principle:
 
 The LLM is a pattern-recognition advisor with **zero execution authority**. It never touches exchange credentials, never talks to Binance, never decides how much capital is at risk, and never has a path to bypass the Risk Engine. Every trading decision — even a `BUY` signal with 99% stated confidence — passes through a deterministic Risk Engine that can downgrade it to `HOLD`, resize it, or reject it outright. All decisions, approvals, rejections, and trades are persisted to PostgreSQL as an immutable audit trail.
 
-The MVP targets a single exchange (Binance Spot), a configurable set of pairs (a `SYMBOLS` env var, comma-separated; defaults to BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see Section 2.1), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `5m` for a livelier dry-run/demo, intended to be `1h` for live trading), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
+The MVP targets a single exchange (Binance Spot), a configurable set of pairs (a `SYMBOLS` env var, comma-separated; defaults to BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see Section 2.1), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `1h` so five CPU-bound local-model calls can be serialized safely), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
 
 The system fails closed. Whenever any component is uncertain, unavailable, times out, or returns malformed data, the default output is `HOLD` (no new position) — never a best-effort guess.
 
@@ -130,7 +130,7 @@ graph TB
 | Component | Responsibility | Owns | Must Never Do |
 |---|---|---|---|
 | **LLM Analysis Service** | Given market context, return a structured `{action, confidence, reasoning}` opinion | Prompt construction, model invocation, output schema validation | Access Binance or Freqtrade; hold API keys; see account balance/equity; determine position size; retry into a non-`HOLD` fallback |
-| **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `5m`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
+| **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `1h`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
 | **Risk Engine** | Sole authority to approve, reject, or resize every signal before execution | Risk rules (Section 9), position sizing, kill switch enforcement, RiskDecision persistence | Execute orders itself (must go through Freqtrade's API); trust LLM confidence/sizing hints without validation |
 | **Freqtrade** | Execute and manage trades against Binance Spot; own stop-loss/ROI enforcement at the exchange-interaction layer | Exchange connectivity, order placement, dry-run wallet simulation, its own internal trade bookkeeping | Originate entry signals (its strategy has no autonomous entry logic in this system); accept commands from anything other than the Risk Engine's authenticated calls |
 | **Binance Spot** | Exchange — source of market data and (in dry-run) simulated order execution | N/A (external) | N/A |
@@ -144,7 +144,7 @@ graph TB
 
 ## 5. Trading Cycle
 
-One full cycle runs independently per symbol, triggered by the Scheduler at each closed candle boundary for the configured `TIMEFRAME` (plus a fixed settle delay, e.g. `:00 + 15s`, to avoid racing exchange candle finalization). Symbols within a cycle are staggered by `SchedulerSettings.symbol_stagger_seconds` (default 40s) so they don't call the LLM Analysis Service at the same instant — on a single local model, simultaneous calls queue and can blow the analyze timeout.
+One full cycle runs independently per symbol, triggered by the Scheduler at each closed candle boundary for the configured `TIMEFRAME` (plus a fixed settle delay, e.g. `:00 + 15s`, to avoid racing exchange candle finalization). Symbols within a cycle are staggered by `SchedulerSettings.symbol_stagger_seconds` (default 190s) so they don't call the LLM Analysis Service at the same instant — on a single CPU-bound local model, simultaneous calls queue and can blow the analyze timeout.
 
 ### 5.1 Summary
 
@@ -184,7 +184,7 @@ sequenceDiagram
         SCH->>SCH: compute indicators (RSI, EMA, MACD, ATR, volume)
         SCH->>LLM: POST /analyze { symbol, candles, indicators, position_context }
 
-        alt LLM timeout (>60s) OR malformed JSON OR schema-invalid OR provider error
+        alt LLM timeout (>180s) OR malformed JSON OR schema-invalid OR provider error
             LLM-->>SCH: error
             SCH->>PG: INSERT Signal(action=HOLD, reason="llm_failure")
         else valid response
@@ -346,7 +346,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `id` | UUID, PK | |
 | `trace_id` | UUID | Correlates to RiskDecision, Order, AuditEvent |
 | `symbol` | text | One of the configured `SYMBOLS` (default: `BTC/USDT`, `ETH/USDT`, `BNB/USDT`, `USDC/USDT`, `SOL/USDT`) |
-| `timeframe` | text | `TIMEFRAME` env var (default `5m`; `1h` for live trading) |
+| `timeframe` | text | `TIMEFRAME` env var (default `1h`) |
 | `candle_ts` | timestamptz | Close time of the candle this signal was based on |
 | `action` | enum | `BUY` \| `SELL` \| `HOLD` |
 | `confidence` | numeric(3,2) | `0.00`–`1.00`, as reported by the LLM |
@@ -511,7 +511,7 @@ The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze
 }
 ```
 
-`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks the prompt alone exceeding the 60s `/analyze` budget (Section 8.3) before generation even starts. `sentiment` is deterministic, advisory context computed by the Scheduler's `MarketSentimentService`; it cannot create a signal, size a position, approve risk, or execute a trade. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
+`ohlcv` contains the model's recent-candle context — the last `llm_ohlcv_window` closed candles (`common/config.py`, default 8), distinct from the larger `candle_lookback` (default 200) the Scheduler fetches for indicator computation. Indicators such as `ema_200` need the full lookback to be accurate; the LLM itself only needs enough raw candles for qualitative recent-price context, since every indicator it needs is already computed and included in `indicators` below — sending all 200 raw candles needlessly bloats the prompt and, on CPU-bound local providers (Section 8.4's `ollama` provider), risks consuming the entire bounded `/analyze` budget (Section 8.3) before generation starts. `sentiment` is deterministic, advisory context computed by the Scheduler's `MarketSentimentService`; it cannot create a signal, size a position, approve risk, or execute a trade. `position_context` tells the model only *whether* a position is currently open, so it can reason about exit conditions — it is a status flag, never a sizing or balance figure.
 
 ### 8.1.1 Market Sentiment Engine
 
@@ -560,8 +560,8 @@ Executed on every model response, in order. The first failure short-circuits to 
 
 | Failure mode | Behavior |
 |---|---|
-| Provider HTTP error / connection failure | One retry with backoff (max 1 retry, total budget 60s), then `HOLD` |
-| Timeout (> 60s total, including retry) | `HOLD` |
+| Provider HTTP error / connection failure | One retry with backoff (max 1 retry, total budget 180s), then `HOLD` |
+| Timeout (> 180s total, including retry) | `HOLD` |
 | Malformed / non-JSON response | `HOLD` (no retry — treat as a prompt/model problem, not a transient one) |
 | Schema validation failure (missing/extra/wrong-typed fields) | `HOLD` |
 | `action` outside enum | `HOLD` |
@@ -576,7 +576,7 @@ One interface (`providers/base.py`), selected by the single `LLM_PROVIDER` value
 - `anthropic` (`providers/anthropic_provider.py`) — hosted API, requires `LLM_API_KEY`.
 - `ollama` (`providers/ollama_provider.py`) — self-hosted, talks to the `ollama` Compose service (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, requires no external API key or account.
 
-Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the 60s `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
+Anthropic requests schema-constrained structured output via `output_config` against `OUTPUT_SCHEMA` (`providers/output_schema.py`, the JSON Schema in Section 8.2). Ollama deliberately does not: measured on CPU inference, llama.cpp's grammar-constrained decoding dropped generation to ~0.3 tokens/sec (vs ~48 tokens/sec unconstrained prefill on the same request) — enough to blow the bounded `/analyze` budget regardless of prompt size. Ollama instead relies on free-form generation plus the system prompt's "respond with ONLY the JSON object" instruction; either provider's non-conforming output falls back safely to `HOLD` through the same `validators.py` pipeline (Section 8.3), so the difference is a performance tradeoff for CPU-bound inference, not a contract difference downstream callers need to know about. The interface exists so a provider can be swapped or a further one added later without touching `main.py`, `validators.py`, or any downstream contract — not as a speculative plugin system. Do not build a provider registry, dynamic loading, or multi-provider routing for the MVP (Section 2.2).
 
 **Runtime-configurable levers.** Which provider/model/temperature is active does not require an `llm_service` restart. `LLM_PROVIDER`/`ANTHROPIC_MODEL`/`OLLAMA_MODEL`/`OLLAMA_TEMPERATURE` are env-sourced defaults as above, layered with whatever has been persisted via `PATCH /config/llm` (Section 11) — same override-table pattern as `RiskConfig` (Section 9.1). The one difference: `llm_service` never reads this table itself, since it has no Postgres access (Section 3's Isolated Zone stays off `core_net`). Instead the Scheduler — which already holds a Postgres session and already calls `/analyze` every cycle — loads the effective config (`common/llm_config_store.py`) and forwards it as `AnalyzeRequest.provider_override`; `main.py` applies it on top of the service's own env settings for that one call only. `provider_override` is excluded from `build_user_prompt()`'s output — it is request-routing metadata, not part of the Section 8.1 input contract, and must never reach the model.
 
@@ -606,6 +606,11 @@ Rules:
 - Do not include phrase-rich BUY/SELL/HOLD examples in the production prompt.
   Small local models can copy their wording and action instead of evaluating
   the request. State the output fields and decision rubric directly.
+- The default local model is `qwen2.5:7b`. Smaller 3B-class models are not an
+  accepted production default for this rubric because dry-run validation found
+  repeated contradictions of supplied RSI/EMA/MACD values and copied prompt
+  phrases. Any replacement model must pass fixed bearish-open-position and
+  bullish-no-position fixtures within the 180-second analysis budget.
 ```
 
 ---

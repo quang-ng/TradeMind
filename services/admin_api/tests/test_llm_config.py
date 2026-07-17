@@ -10,7 +10,7 @@ async def test_get_llm_config_returns_env_defaults_with_no_override(client, auth
     assert body == {
         "llm_provider": "anthropic",
         "anthropic_model": "claude-sonnet-5",
-        "ollama_model": "llama3.2:3b",
+        "ollama_model": "qwen2.5:7b",
         "ollama_temperature": 0.4,
     }
 
@@ -29,7 +29,7 @@ async def test_patch_llm_config_persists_partial_override_and_writes_audit_event
     assert body["ollama_temperature"] == 0.7
     # Untouched fields keep falling back to their env default.
     assert body["anthropic_model"] == "claude-sonnet-5"
-    assert body["ollama_model"] == "llama3.2:3b"
+    assert body["ollama_model"] == "qwen2.5:7b"
 
     follow_up = await client.get("/config/llm", headers=auth_headers)
     assert follow_up.json() == body

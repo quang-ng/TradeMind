@@ -22,14 +22,15 @@ class LLMServiceSettings(BaseSettings):
     llm_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
     ollama_base_url: str = "http://ollama:11434"
-    ollama_model: str = "llama3.2:3b"
+    # Qwen2.5 7B is the smallest validated default for this indicator rubric.
+    # The previous llama3.2 3B deployment repeatedly contradicted supplied
+    # RSI/EMA/MACD values and copied prompt phrases into false BUY signals.
+    ollama_model: str = "qwen2.5:7b"
     ollama_temperature: float = 0.4
-    # 60s (not the original 30s): on CPU-bound Ollama inference (llama3.2:3b),
-    # measured prompt-eval (~60 tok/s) + generation (~12.5 tok/s) regularly
-    # left little to no margin within 30s, producing frequent llm_timeout
-    # fallbacks even without contention. 60s fits comfortably inside the 5m
-    # scheduler cadence (SchedulerSettings.timeframe) with room to spare.
-    analyze_timeout_seconds: float = 60.0
+    # Qwen2.5 7B needs roughly 2-3 minutes per request on the reference
+    # CPU-only VPS. The hourly cadence and per-symbol stagger keep calls
+    # serialized; any overrun still fails closed to HOLD.
+    analyze_timeout_seconds: float = 180.0
 
 
 class RedisSettings(BaseSettings):
@@ -72,15 +73,15 @@ class SchedulerSettings(BaseSettings):
 
     llm_service_url: str = "http://localhost:8001/analyze"
     # Must stay a few seconds above LLMServiceSettings.analyze_timeout_seconds
-    # (60s) so the service's own timeout fires first and returns a HOLD
+    # (180s) so the service's own timeout fires first and returns a HOLD
     # signal, rather than this HTTP client cutting the connection early.
-    llm_request_timeout_seconds: float = 65.0
+    llm_request_timeout_seconds: float = 185.0
     candle_lookback: int = 200
     # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
     # full lookback, but the LLM already receives those computed indicators
     # separately (Section 8.1) — it doesn't need 200 raw candles, and on
-    # CPU-bound local providers a too-large ohlcv array can make the prompt
-    # alone exceed the 60s /analyze budget (Section 8.3) before generation
+    # CPU-bound local providers a too-large ohlcv array can consume the entire
+    # /analyze budget (Section 8.3) before generation
     # even starts. Only the most recent `llm_ohlcv_window` candles are sent.
     llm_ohlcv_window: int = 8
     # Comma-separated in the environment (SYMBOLS=BTC/USDT,ETH/USDT,...) via
@@ -103,17 +104,16 @@ class SchedulerSettings(BaseSettings):
         if isinstance(value, str):
             return [s.strip() for s in value.split(",") if s.strip()]
         return value
-    # Defaults to 5m so a demo/dry-run deployment sees a new signal every few
-    # minutes instead of waiting up to 1h. Set TIMEFRAME=1h for live trading
-    # (PROJECT.md Section 2.1's intended cadence) — this is a config change,
-    # not a code change.
-    timeframe: str = "5m"
+    # Hourly candles leave enough time to serialize five CPU-bound 7B model
+    # calls without overlap. A shorter cadence requires faster inference or
+    # fewer symbols and must still satisfy build_scheduler's stagger guard.
+    timeframe: str = "1h"
     candle_settle_second: int = 15
     # Per-symbol offset (see scheduler/app/main.py's stagger logic) so BTC
     # and ETH cycles don't call the LLM service at the same instant — on a
     # single local Ollama model, concurrent calls queue and can blow the
     # analyze timeout (the second call effectively pays 2x generation time).
-    symbol_stagger_seconds: int = 40
+    symbol_stagger_seconds: int = 190
     scheduler_health_port: int = 8000
 
 

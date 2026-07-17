@@ -246,7 +246,7 @@ async def test_run_cycle_forwards_effective_llm_config_as_provider_override(monk
     assert body["provider_override"] == {
         "llm_provider": "ollama",
         "anthropic_model": "claude-sonnet-5",
-        "ollama_model": "llama3.2:3b",
+        "ollama_model": "qwen2.5:7b",
         "ollama_temperature": 0.9,
     }
     assert set(body["sentiment"]) == {"score", "state", "confidence", "reasons"}

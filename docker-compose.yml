@@ -82,7 +82,7 @@ services:
     image: ollama/ollama:latest
     environment:
       OLLAMA_HOST: ollama:11434
-    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:7b}"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -103,7 +103,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-180}
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
@@ -131,8 +132,10 @@ services:
       POSTGRES_DSN: postgresql+asyncpg://trademind:${POSTGRES_PASSWORD:-trademind}@postgres:5432/trademind
       REDIS_URL: redis://redis:6379/0
       LLM_SERVICE_URL: http://llm_service:8000/analyze
-      TIMEFRAME: ${TIMEFRAME:-5m}
+      TIMEFRAME: ${TIMEFRAME:-1h}
       CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
+      SYMBOL_STAGGER_SECONDS: ${SYMBOL_STAGGER_SECONDS:-190}
+      LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-185}
       # Comma-separated (common/config.py's SchedulerSettings splits it) —
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
       # services never disagree on which symbols are actually tradable.
@@ -147,7 +150,7 @@ services:
       # actually configured with whenever no DB override exists yet.
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_TEMPERATURE: ${OLLAMA_TEMPERATURE:-0.4}
     depends_on:
       migrate:

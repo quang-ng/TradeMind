@@ -23,7 +23,7 @@ def test_build_scheduler_registers_one_hourly_job_per_symbol() -> None:
     assert next_fire == datetime(2026, 7, 15, 14, 0, 15, tzinfo=timezone.utc)
 
 
-def test_build_scheduler_defaults_to_5m_cadence() -> None:
+def test_build_scheduler_defaults_to_hourly_cpu_safe_cadence() -> None:
     settings = SchedulerSettings(symbols=["BTC/USDT", "ETH/USDT"], candle_settle_second=15)
 
     scheduler = build_scheduler(settings)
@@ -32,7 +32,7 @@ def test_build_scheduler_defaults_to_5m_cadence() -> None:
     next_fire = trigger.get_next_fire_time(
         None, datetime(2026, 7, 15, 13, 32, tzinfo=timezone.utc)
     )
-    assert next_fire == datetime(2026, 7, 15, 13, 35, 15, tzinfo=timezone.utc)
+    assert next_fire == datetime(2026, 7, 15, 14, 0, 15, tzinfo=timezone.utc)
 
 
 def test_build_scheduler_staggers_symbols_to_avoid_concurrent_llm_calls() -> None:

@@ -14,8 +14,8 @@ the public network.
   in memory — roughly 4-6 GB for a 3B-parameter model, 8+ GB for a 7-8B
   model, at Q4 quantization — plus a few GB of persistent disk per pulled
   model. An NVIDIA GPU with `nvidia-container-toolkit` is optional but
-  strongly recommended: CPU-only inference risks exceeding the 60s `/analyze`
-  timeout (PROJECT.md Section 8.3) once you go past a small (~3B) model.
+  strongly recommended: CPU-only inference requires the hourly cadence and
+  180s `/analyze` budget for the default 7B model (PROJECT.md Section 8.3).
 - a VPN, SSH tunnel, or TLS reverse proxy for the Admin API
 - off-host encrypted backup storage
 
@@ -46,7 +46,7 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml ps
 The one-shot `migrate` service runs Alembic after PostgreSQL is healthy.
 Scheduler, Risk Engine, Admin API, and Notifier will not start if migration
 fails. The scheduler runs each symbol in `SYMBOLS` (default: BTC/USDT, ETH/USDT,
-BNB/USDT, USDC/USDT, SOL/USDT), staggered a few seconds apart starting at
+BNB/USDT, USDC/USDT, SOL/USDT), staggered 190 seconds apart starting at
 `HH:00:15 UTC` by default.
 
 Verify the API from the Docker host:
@@ -127,7 +127,7 @@ Alert immediately when:
 
 - any long-running container is unhealthy or unexpectedly restarts;
 - `/status` reports `dry_run=false`;
-- either pair has no new signal for 75 minutes;
+- any configured symbol has no new signal for 75 minutes beyond its stagger;
 - an `ORDER_FAILED`, `INTERNAL_ERROR`, or `RECONCILIATION_REQUIRED` event occurs;
 - a `SUBMITTED` order remains unresolved for more than 10 minutes;
 - Redis has pending Risk Engine messages for more than two minutes;
