@@ -335,7 +335,7 @@ trademind/
 
 ## 7. Domain Models
 
-Persisted entities live in PostgreSQL and are the audit system of record. Freqtrade retains its own internal trade database (SQLite, container-local) purely for its own execution bookkeeping — TradeMind does not treat it as authoritative and mirrors the state it cares about into `orders`/`positions` via the webhook, so the audit trail is stable even if Freqtrade's internal schema changes across versions.
+Persisted entities live in PostgreSQL and are the audit system of record. Freqtrade retains its own internal trade database in a persistent SQLite volume purely for its own execution bookkeeping — TradeMind does not treat it as authoritative and mirrors the state it cares about into `orders`/`positions` via the webhook, so the audit trail is stable even if Freqtrade's internal schema changes across versions. Persisting SQLite prevents Freqtrade trade IDs from being reused after routine container recreation; webhook, reconciliation, and exit-order matching still validate both the trade ID and symbol.
 
 Every row created during a single trading-cycle run shares a `trace_id` (UUID, minted by the Scheduler at cycle start), enabling a single query to reconstruct the full decision path from signal to (eventual) position close.
 

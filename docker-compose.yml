@@ -191,6 +191,8 @@ services:
       SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,USDC/USDT,SOL/USDT}
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - freqtrade_data:/freqtrade/db
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/ping')"]
       interval: 10s
@@ -338,3 +340,4 @@ volumes:
   postgres_data:
   redis_data:
   ollama_data:
+  freqtrade_data:

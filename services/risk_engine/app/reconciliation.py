@@ -56,6 +56,20 @@ async def reconcile_submitted_orders(
             await _alert_once(session, order, "freqtrade_lookup_failed")
             continue
 
+        if trade.pair != order.symbol:
+            logger.error(
+                "order_reconciliation_pair_mismatch",
+                extra={
+                    "trace_id": str(order.trace_id),
+                    "order_id": str(order.id),
+                    "trade_id": trade.trade_id,
+                    "order_symbol": order.symbol,
+                    "trade_pair": trade.pair,
+                },
+            )
+            await _alert_once(session, order, "freqtrade_pair_mismatch")
+            continue
+
         if order.side == OrderSide.BUY.value and trade.is_open:
             if await _reconcile_open_entry(session, order, trade):
                 reconciled += 1

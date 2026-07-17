@@ -218,6 +218,11 @@ async def test_sell_signal_with_open_position_submits_forceexit(db_session_facto
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"trade_id": 7, "pair": "BTC/USDT", "is_open": True},
+            )
         captured["body"] = request.read()
         return httpx.Response(200, json={"result": "Created exit order"})
 
@@ -249,6 +254,44 @@ async def test_sell_signal_with_open_position_submits_forceexit(db_session_facto
         ).scalar_one()
         assert position.exit_order_id == exit_order.id
         assert position.status == PositionStatus.OPEN.value  # webhook confirms the close later
+
+
+async def test_sell_signal_fails_closed_when_trade_id_belongs_to_another_pair(
+    db_session_factory,
+):
+    await _seed_open_position(db_session_factory, symbol="BTC/USDT", freqtrade_trade_id=1)
+    signal_id = await _seed_signal(db_session_factory, symbol="BTC/USDT", action=Action.SELL)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            json={"trade_id": 1, "pair": "SOL/USDT", "is_open": True},
+        )
+
+    async with db_session_factory() as session:
+        await process_signal(
+            session,
+            FakeRedis(),
+            str(signal_id),
+            RiskConfig(),
+            AccountSettings(),
+            _mock_freqtrade(handler),
+        )
+
+    async with db_session_factory() as session:
+        decision = (
+            await session.execute(select(RiskDecision).where(RiskDecision.signal_id == signal_id))
+        ).scalar_one()
+        exit_order = (
+            await session.execute(select(Order).where(Order.risk_decision_id == decision.id))
+        ).scalar_one()
+        position = (
+            await session.execute(select(Position).where(Position.symbol == "BTC/USDT"))
+        ).scalar_one()
+        assert decision.approved is True
+        assert exit_order.status == OrderStatus.FAILED.value
+        assert position.exit_order_id is None
 
 
 async def test_sell_signal_with_no_open_position_is_rejected_without_calling_freqtrade(

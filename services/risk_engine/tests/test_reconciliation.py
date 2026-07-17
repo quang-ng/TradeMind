@@ -143,3 +143,37 @@ async def test_missing_trade_id_creates_only_one_operator_alert(db_session_facto
         order = await session.get(Order, order_id)
         assert len(events) == 1
         assert order.status == OrderStatus.SUBMITTED.value
+
+
+async def test_pair_mismatch_fails_closed_and_creates_operator_alert(db_session_factory):
+    order_id = await _seed_order(db_session_factory, trade_id=1)
+    client = FakeFreqtradeClient(
+        FreqtradeTrade(
+            trade_id=1,
+            pair="SOL/USDT",
+            is_open=True,
+            amount=Decimal("6.605"),
+            open_rate=Decimal("75.7"),
+        )
+    )
+
+    async with db_session_factory() as session:
+        count = await reconcile_submitted_orders(
+            session, client, now=NOW, stale_after=timedelta(minutes=10)
+        )
+
+    assert count == 0
+    async with db_session_factory() as session:
+        order = await session.get(Order, order_id)
+        event = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.event_type
+                    == AuditEventType.RECONCILIATION_REQUIRED.value
+                )
+            )
+        ).scalar_one()
+        assert order.status == OrderStatus.SUBMITTED.value
+        assert order.filled_amount is None
+        assert order.avg_price is None
+        assert event.payload["reason"] == "freqtrade_pair_mismatch"

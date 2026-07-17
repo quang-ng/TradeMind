@@ -174,6 +174,42 @@ async def test_entry_fill_backfills_missing_trade_id(db_session_factory):
         assert order.status == OrderStatus.FILLED.value
 
 
+async def test_entry_fill_does_not_match_reused_trade_id_from_another_pair(
+    db_session_factory,
+):
+    btc_order_id = await _seed_submitted_entry_order(
+        db_session_factory, symbol="BTC/USDT", trade_id=1
+    )
+    sol_order_id = await _seed_submitted_entry_order(
+        db_session_factory, symbol="SOL/USDT", trade_id=1
+    )
+
+    async with await _client() as client:
+        response = await client.post(
+            "/webhooks/freqtrade",
+            json={
+                "event": "entry_fill",
+                "trade_id": 1,
+                "pair": "SOL/USDT",
+                "secret": WEBHOOK_SECRET,
+                "open_rate": "75.7",
+                "amount": "6.605",
+                "open_date": "2026-07-17T01:13:32+00:00",
+            },
+        )
+    assert response.status_code == 204
+
+    async with db_session_factory() as session:
+        btc_order = await session.get(Order, btc_order_id)
+        sol_order = await session.get(Order, sol_order_id)
+        assert btc_order.status == OrderStatus.SUBMITTED.value
+        assert btc_order.filled_amount is None
+        assert btc_order.avg_price is None
+        assert sol_order.status == OrderStatus.FILLED.value
+        assert sol_order.filled_amount == Decimal("6.605")
+        assert sol_order.avg_price == Decimal("75.7")
+
+
 async def test_exit_fill_closes_position(db_session_factory):
     entry_order_id = await _seed_submitted_entry_order(
         db_session_factory, symbol="BTC/USDT", trade_id=10

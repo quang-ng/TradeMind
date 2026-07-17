@@ -51,7 +51,13 @@ async def _find_order(
 ) -> Order | None:
     order = (
         await session.execute(
-            select(Order).where(Order.freqtrade_trade_id == trade_id, Order.side == side)
+            select(Order)
+            .where(
+                Order.freqtrade_trade_id == trade_id,
+                Order.symbol == pair,
+                Order.side == side,
+            )
+            .order_by(Order.created_at.desc())
         )
     ).scalars().first()
     if order is not None:

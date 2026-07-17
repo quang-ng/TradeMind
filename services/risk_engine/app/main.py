@@ -319,6 +319,13 @@ async def _submit_exit_order(
         return
 
     try:
+        trade = await freqtrade_client.get_trade(trade_id=entry_order.freqtrade_trade_id)
+        if trade.pair != signal_row.symbol or not trade.is_open:
+            raise FreqtradeUnavailable(
+                "entry trade does not match the open position "
+                f"(expected_pair={signal_row.symbol}, actual_pair={trade.pair}, "
+                f"is_open={trade.is_open})"
+            )
         await freqtrade_client.forceexit(trade_id=entry_order.freqtrade_trade_id)
         status = OrderStatus.SUBMITTED
         event_type = AuditEventType.ORDER_SUBMITTED

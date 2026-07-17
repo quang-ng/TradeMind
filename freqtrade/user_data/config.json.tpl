@@ -6,6 +6,7 @@
     "fiat_display_currency": "USD",
     "dry_run": ${DRY_RUN},
     "dry_run_wallet": 10000,
+    "db_url": "sqlite:////freqtrade/db/tradesv3.dryrun.sqlite",
     "cancel_open_orders_on_exit": false,
     "trading_mode": "spot",
     "unfilledtimeout": {
