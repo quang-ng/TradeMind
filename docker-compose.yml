@@ -140,7 +140,7 @@ services:
       # Comma-separated (common/config.py's SchedulerSettings splits it) —
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
       # services never disagree on which symbols are actually tradable.
-      SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,USDC/USDT}
+      SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,XRP/USDT}
       # Must mirror llm_service's own LLM_PROVIDER/ANTHROPIC_MODEL/OLLAMA_MODEL/
       # OLLAMA_TEMPERATURE defaults below (PROJECT.md Section 8.4) — the
       # Scheduler computes the *effective* LLM config (these env defaults
@@ -192,7 +192,7 @@ services:
       DRY_RUN: ${DRY_RUN:-true}
       # Must mirror the scheduler's SYMBOLS above — docker-entrypoint.sh
       # turns this comma-separated value into pair_whitelist's JSON array.
-      SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,USDC/USDT}
+      SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,XRP/USDT}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

@@ -94,7 +94,7 @@ class SchedulerSettings(BaseSettings):
         "BTC/USDT",
         "ETH/USDT",
         "BNB/USDT",
-        "USDC/USDT",
+        "XRP/USDT",
     ]
 
     @field_validator("symbols", mode="before")

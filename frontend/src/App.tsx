@@ -792,7 +792,7 @@ function MetricCard({ label, value, note, icon, tone }: { label: string; value: 
   return <article className={`metric-card ${tone ?? ''}`}><div className="metric-top"><span>{label}</span><i>{icon}</i></div><strong>{value}</strong><p>{note}</p></article>
 }
 
-const COIN_GLYPHS: Record<string, string> = { BTC: '₿', ETH: 'Ξ', BNB: 'B', USDC: '$', SOL: 'S' }
+const COIN_GLYPHS: Record<string, string> = { BTC: '₿', ETH: 'Ξ', BNB: 'B', XRP: 'X', SOL: 'S' }
 
 function Coin({ symbol, small = false }: { symbol: string; small?: boolean }) {
   const base = symbol.split('/')[0]

@@ -31,14 +31,14 @@ def test_build_scheduler_defaults_to_five_minute_four_symbol_cadence() -> None:
     assert len(scheduler.get_jobs()) == 4
     btc_trigger = scheduler.get_job("closed-candle:BTC/USDT").trigger
     eth_trigger = scheduler.get_job("closed-candle:ETH/USDT").trigger
-    usdc_trigger = scheduler.get_job("closed-candle:USDC/USDT").trigger
+    xrp_trigger = scheduler.get_job("closed-candle:XRP/USDT").trigger
     after = datetime(2026, 7, 15, 13, 32, tzinfo=timezone.utc)
     btc_fire = btc_trigger.get_next_fire_time(None, after)
     eth_fire = eth_trigger.get_next_fire_time(None, after)
-    usdc_fire = usdc_trigger.get_next_fire_time(None, after)
+    xrp_fire = xrp_trigger.get_next_fire_time(None, after)
     assert btc_fire == datetime(2026, 7, 15, 13, 35, 15, tzinfo=timezone.utc)
     assert eth_fire == datetime(2026, 7, 15, 13, 36, 25, tzinfo=timezone.utc)
-    assert usdc_fire == datetime(2026, 7, 15, 13, 33, 45, tzinfo=timezone.utc)
+    assert xrp_fire == datetime(2026, 7, 15, 13, 33, 45, tzinfo=timezone.utc)
 
 
 def test_build_scheduler_staggers_symbols_to_avoid_concurrent_llm_calls() -> None:
