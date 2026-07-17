@@ -7,7 +7,7 @@ TradeMind is a self-hosted, AI-assisted cryptocurrency trading platform designed
 The Large Language Model (LLM) analyzes market data and suggests `BUY`, `SELL`, or `HOLD`. It cannot access exchange credentials, execute orders, or determine position size. Every signal is independently checked by a deterministic Risk Engine before an approved order can reach Freqtrade.
 
 > [!IMPORTANT]
-> TradeMind is currently a **draft MVP specification**, not a production-ready trading system. The MVP is limited to Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see `SYMBOLS`), closed 1-hour candles, long-only positions, and dry-run execution.
+> TradeMind is currently a **draft MVP specification**, not a production-ready trading system. The MVP is limited to Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT — see `SYMBOLS`), closed 5-minute candles, long-only positions, and dry-run execution.
 
 ## Why TradeMind?
 
@@ -69,7 +69,7 @@ PostgreSQL is the durable audit system of record. Redis is used only for coordin
 
 ## Trading flow
 
-For each supported pair, one cycle runs after a 1-hour candle closes:
+For each supported pair, one cycle runs after a 5-minute candle closes:
 
 1. The Scheduler obtains a per-symbol lock and fetches closed candle data.
 2. Indicators such as RSI, EMA, MACD, ATR, and volume averages are calculated.
@@ -161,8 +161,8 @@ More monitoring commands (logs, Postgres queries, Redis checks, backups) are in 
 | Area | MVP choice |
 |---|---|
 | Exchange | Binance Spot |
-| Pairs | Configurable via `SYMBOLS` (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT) |
-| Timeframe | Closed 1-hour candles |
+| Pairs | Configurable via `SYMBOLS` (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT) |
+| Timeframe | Closed 5-minute candles |
 | Position type | Long-only spot |
 | Execution | Freqtrade, dry-run only |
 | Analysis | One configured LLM provider |

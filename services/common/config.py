@@ -27,9 +27,9 @@ class LLMServiceSettings(BaseSettings):
     # RSI/EMA/MACD values and copied prompt phrases into false BUY signals.
     ollama_model: str = "qwen2.5:7b"
     ollama_temperature: float = 0.4
-    # Qwen2.5 7B needs roughly 2-3 minutes per request on the reference
-    # CPU-only VPS. The hourly cadence and per-symbol stagger keep calls
-    # serialized; any overrun still fails closed to HOLD.
+    # The bounded timeout remains a fail-closed backstop for unusually slow
+    # local inference; the Scheduler staggers normal requests within each
+    # five-minute candle period.
     analyze_timeout_seconds: float = 180.0
 
 
@@ -95,7 +95,6 @@ class SchedulerSettings(BaseSettings):
         "ETH/USDT",
         "BNB/USDT",
         "USDC/USDT",
-        "SOL/USDT",
     ]
 
     @field_validator("symbols", mode="before")
@@ -104,16 +103,16 @@ class SchedulerSettings(BaseSettings):
         if isinstance(value, str):
             return [s.strip() for s in value.split(",") if s.strip()]
         return value
-    # Hourly candles leave enough time to serialize five CPU-bound 7B model
-    # calls without overlap. A shorter cadence requires faster inference or
-    # fewer symbols and must still satisfy build_scheduler's stagger guard.
-    timeframe: str = "1h"
+    # Four requests are spread across each five-minute candle period. The
+    # stagger guard below rejects any symbol set whose final offset would
+    # spill into the next candle.
+    timeframe: str = "5m"
     candle_settle_second: int = 15
     # Per-symbol offset (see scheduler/app/main.py's stagger logic) so BTC
     # and ETH cycles don't call the LLM service at the same instant — on a
     # single local Ollama model, concurrent calls queue and can blow the
     # analyze timeout (the second call effectively pays 2x generation time).
-    symbol_stagger_seconds: int = 190
+    symbol_stagger_seconds: int = 70
     scheduler_health_port: int = 8000
 
 

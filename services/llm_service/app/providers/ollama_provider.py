@@ -60,10 +60,9 @@ class OllamaProvider(Provider):
                     # otherwise usable cycle into a technical HOLD.
                     "num_predict": 220,
                 },
-                # Cycles run hourly (PROJECT.md Section 5); Ollama's default
-                # keep_alive (5m) would unload the model between every
-                # cycle, paying the full model-load cost on each call. Keep
-                # it resident so only the first call after startup pays it.
+                # Multiple symbols run within each five-minute candle period
+                # (PROJECT.md Section 5). Keep the model resident so normal
+                # staggered calls do not repeatedly pay its load cost.
                 "keep_alive": "90m",
             },
         )

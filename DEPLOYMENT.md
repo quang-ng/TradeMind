@@ -14,8 +14,9 @@ the public network.
   in memory — roughly 4-6 GB for a 3B-parameter model, 8+ GB for a 7-8B
   model, at Q4 quantization — plus a few GB of persistent disk per pulled
   model. An NVIDIA GPU with `nvidia-container-toolkit` is optional but
-  strongly recommended: CPU-only inference requires the hourly cadence and
-  180s `/analyze` budget for the default 7B model (PROJECT.md Section 8.3).
+  strongly recommended. The default CPU-only schedule staggers four symbols
+  across each five-minute candle while retaining a fail-closed 180s
+  `/analyze` budget (PROJECT.md Sections 5.1 and 8.3).
 - a VPN, SSH tunnel, or TLS reverse proxy for the Admin API
 - off-host encrypted backup storage
 
@@ -46,8 +47,8 @@ docker compose -f docker-compose.yml -f docker-compose.production.yml ps
 The one-shot `migrate` service runs Alembic after PostgreSQL is healthy.
 Scheduler, Risk Engine, Admin API, and Notifier will not start if migration
 fails. The scheduler runs each symbol in `SYMBOLS` (default: BTC/USDT, ETH/USDT,
-BNB/USDT, USDC/USDT, SOL/USDT), staggered 190 seconds apart starting at
-`HH:00:15 UTC` by default.
+BNB/USDT, USDC/USDT), staggered 70 seconds apart starting 15 seconds after
+each five-minute candle closes by default.
 
 Verify the API from the Docker host:
 

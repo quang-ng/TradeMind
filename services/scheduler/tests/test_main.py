@@ -23,16 +23,22 @@ def test_build_scheduler_registers_one_hourly_job_per_symbol() -> None:
     assert next_fire == datetime(2026, 7, 15, 14, 0, 15, tzinfo=timezone.utc)
 
 
-def test_build_scheduler_defaults_to_hourly_cpu_safe_cadence() -> None:
-    settings = SchedulerSettings(symbols=["BTC/USDT", "ETH/USDT"], candle_settle_second=15)
+def test_build_scheduler_defaults_to_five_minute_four_symbol_cadence() -> None:
+    settings = SchedulerSettings(candle_settle_second=15)
 
     scheduler = build_scheduler(settings)
 
-    trigger = scheduler.get_job("closed-candle:BTC/USDT").trigger
-    next_fire = trigger.get_next_fire_time(
-        None, datetime(2026, 7, 15, 13, 32, tzinfo=timezone.utc)
-    )
-    assert next_fire == datetime(2026, 7, 15, 14, 0, 15, tzinfo=timezone.utc)
+    assert len(scheduler.get_jobs()) == 4
+    btc_trigger = scheduler.get_job("closed-candle:BTC/USDT").trigger
+    eth_trigger = scheduler.get_job("closed-candle:ETH/USDT").trigger
+    usdc_trigger = scheduler.get_job("closed-candle:USDC/USDT").trigger
+    after = datetime(2026, 7, 15, 13, 32, tzinfo=timezone.utc)
+    btc_fire = btc_trigger.get_next_fire_time(None, after)
+    eth_fire = eth_trigger.get_next_fire_time(None, after)
+    usdc_fire = usdc_trigger.get_next_fire_time(None, after)
+    assert btc_fire == datetime(2026, 7, 15, 13, 35, 15, tzinfo=timezone.utc)
+    assert eth_fire == datetime(2026, 7, 15, 13, 36, 25, tzinfo=timezone.utc)
+    assert usdc_fire == datetime(2026, 7, 15, 13, 33, 45, tzinfo=timezone.utc)
 
 
 def test_build_scheduler_staggers_symbols_to_avoid_concurrent_llm_calls() -> None:

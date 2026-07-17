@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Status | Draft — MVP specification |
-| Scope | Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT), dry-run |
+| Scope | Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT), dry-run |
 | Audience | Coding agents and engineers implementing this system |
 | Authority | This document is the single source of truth. Any implementation decision that conflicts with it must either conform to it or update it first. |
 
@@ -21,7 +21,7 @@ The system is built on one non-negotiable architectural principle:
 
 The LLM is a pattern-recognition advisor with **zero execution authority**. It never touches exchange credentials, never talks to Binance, never decides how much capital is at risk, and never has a path to bypass the Risk Engine. Every trading decision — even a `BUY` signal with 99% stated confidence — passes through a deterministic Risk Engine that can downgrade it to `HOLD`, resize it, or reject it outright. All decisions, approvals, rejections, and trades are persisted to PostgreSQL as an immutable audit trail.
 
-The MVP targets a single exchange (Binance Spot), a configurable set of pairs (a `SYMBOLS` env var, comma-separated; defaults to BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT — see Section 2.1), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `1h` so five CPU-bound local-model calls can be serialized safely), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
+The MVP targets a single exchange (Binance Spot), a configurable set of pairs (a `SYMBOLS` env var, comma-separated; defaults to BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT — see Section 2.1), one timeframe at a time (closed candles only — a `TIMEFRAME` env var picks it; defaults to `5m`, with the four CPU-bound local-model calls staggered 70 seconds apart), long-only positions, dry-run execution, and a single LLM provider. It is designed so that flipping from dry-run to live trading later is a configuration change reviewed by a human, not a code change — and so that adding pairs, exchanges, or LLM providers later does not require re-architecting the trust boundaries described here.
 
 The system fails closed. Whenever any component is uncertain, unavailable, times out, or returns malformed data, the default output is `HOLD` (no new position) — never a best-effort guess.
 
@@ -32,7 +32,7 @@ The system fails closed. Whenever any component is uncertain, unavailable, times
 ### 2.1 Goals (MVP)
 
 - Run fully self-hosted via Docker Compose, with no dependency on a third-party control plane.
-- Analyze each configured symbol (`SYMBOLS` env var; default BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT, SOL/USDT) on closed 1-hour candles using one LLM provider.
+- Analyze each configured symbol (`SYMBOLS` env var; default BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT) on closed 5-minute candles using one LLM provider.
 - Enforce a deterministic Risk Engine that has final authority over every trade: sizing, exposure limits, loss limits, cooldowns, and a global kill switch.
 - Execute trades exclusively through Freqtrade, in dry-run mode, against Binance Spot.
 - Persist a complete, queryable audit trail of every signal, decision, and order in PostgreSQL.
@@ -130,7 +130,7 @@ graph TB
 | Component | Responsibility | Owns | Must Never Do |
 |---|---|---|---|
 | **LLM Analysis Service** | Given market context, return a structured `{action, confidence, reasoning}` opinion | Prompt construction, model invocation, output schema validation | Access Binance or Freqtrade; hold API keys; see account balance/equity; determine position size; retry into a non-`HOLD` fallback |
-| **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `1h`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
+| **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `5m`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
 | **Risk Engine** | Sole authority to approve, reject, or resize every signal before execution | Risk rules (Section 9), position sizing, kill switch enforcement, RiskDecision persistence | Execute orders itself (must go through Freqtrade's API); trust LLM confidence/sizing hints without validation |
 | **Freqtrade** | Execute and manage trades against Binance Spot; own stop-loss/ROI enforcement at the exchange-interaction layer | Exchange connectivity, order placement, dry-run wallet simulation, its own internal trade bookkeeping | Originate entry signals (its strategy has no autonomous entry logic in this system); accept commands from anything other than the Risk Engine's authenticated calls |
 | **Binance Spot** | Exchange — source of market data and (in dry-run) simulated order execution | N/A (external) | N/A |
@@ -345,8 +345,8 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 |---|---|---|
 | `id` | UUID, PK | |
 | `trace_id` | UUID | Correlates to RiskDecision, Order, AuditEvent |
-| `symbol` | text | One of the configured `SYMBOLS` (default: `BTC/USDT`, `ETH/USDT`, `BNB/USDT`, `USDC/USDT`, `SOL/USDT`) |
-| `timeframe` | text | `TIMEFRAME` env var (default `1h`) |
+| `symbol` | text | One of the configured `SYMBOLS` (default: `BTC/USDT`, `ETH/USDT`, `BNB/USDT`, `USDC/USDT`) |
+| `timeframe` | text | `TIMEFRAME` env var (default `5m`) |
 | `candle_ts` | timestamptz | Close time of the candle this signal was based on |
 | `action` | enum | `BUY` \| `SELL` \| `HOLD` |
 | `confidence` | numeric(3,2) | `0.00`–`1.00`, as reported by the LLM |
@@ -817,11 +817,11 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 | Phase | Scope | Exit Criteria |
 |---|---|---|
 | **0 — Foundations** | Repo scaffold, `docker-compose.yml` (Postgres, Redis), Alembic init, base FastAPI `/health`, CI (lint + test) | `docker compose up` boots an empty stack; `/health` returns 200; CI green on an empty commit |
-| **1 — Data & LLM Integration** | Market data fetcher, indicator computation, advisory Market Sentiment Engine, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for both pairs; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
+| **1 — Data & LLM Integration** | Market data fetcher, indicator computation, advisory Market Sentiment Engine, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for the configured symbols; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
 | **2 — Risk Engine** | All 12 rules (Section 9.1), position sizing, Redis locks/idempotency, Postgres persistence for `Signal`/`RiskDecision`/`AuditEvent` | One passing unit test per rule; a property-based test proves position size never exceeds `max_position_pct` or `free_balance` under randomized inputs |
 | **3 — Freqtrade Execution (dry-run)** | Freqtrade container + `ExternalSignalStrategy`, `forceenter`/`forceexit` integration, webhook receiver, `Order`/`Position` persistence | A manually triggered end-to-end dry-run trade goes from `Signal` → `RiskDecision` → `Order(FILLED)` → `Position(OPEN)`, visible identically in Postgres and the Freqtrade UI |
 | **4 — Admin API, Console & Notifications** | Full endpoint set (Section 11), React operator console, Telegram notifications on every audit event, kill switch wired end-to-end through Administration Zone clients | Operator can fully observe signals, decisions, money, orders, positions, and audit traces and halt trading without SSH/server access |
-| **5 — Hardening & Scheduling** | Real APScheduler cron on candle closes for both pairs, chaos tests (kill Redis/Postgres/LLM/Freqtrade mid-cycle), orphaned-order reconciliation job, docs pass | All items in Section 13 pass; a 72-hour unattended dry-run produces zero unhandled exceptions and a fully reconstructable audit trail for every cycle |
+| **5 — Hardening & Scheduling** | Real APScheduler cron on candle closes for every configured symbol, chaos tests (kill Redis/Postgres/LLM/Freqtrade mid-cycle), orphaned-order reconciliation job, docs pass | All items in Section 13 pass; a 72-hour unattended dry-run produces zero unhandled exceptions and a fully reconstructable audit trail for every cycle |
 
 ---
 
