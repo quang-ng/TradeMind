@@ -158,11 +158,12 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     candles = _candles(25)
     monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
     redis_client = FakeRedis()
+    captured_session = FakeSession()
 
     trace_id = await jobs.run_cycle(
         "BTC/USDT",
         redis_client=redis_client,
-        session_factory=_session_factory,
+        session_factory=lambda: captured_session,
         http_client=_http_client_returning(LLM_PAYLOAD),
         settings=settings,
     )
@@ -173,6 +174,19 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     assert stream == jobs.redis_keys.SIGNALS_PENDING_STREAM
     assert "signal_id" in fields
     assert jobs.redis_keys.cycle_lock("BTC/USDT") in redis_client.deleted
+
+    signal_row = captured_session.added[0]
+    assert signal_row.model_input is not None
+    assert set(signal_row.model_input) == {
+        "symbol",
+        "timeframe",
+        "candle_close_time",
+        "ohlcv",
+        "indicators",
+        "sentiment",
+        "position_context",
+    }
+    assert "provider_override" not in signal_row.model_input
 
 
 async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeypatch, settings):

@@ -44,6 +44,7 @@ class Signal(Base):
     reasoning: Mapped[str] = mapped_column(String(500))
     model_name: Mapped[str] = mapped_column(String)
     raw_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    model_input: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     atr_14: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     status: Mapped[SignalStatus] = mapped_column(String, default=SignalStatus.PENDING)

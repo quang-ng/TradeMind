@@ -51,6 +51,7 @@ class SignalOut(BaseModel):
 
 class SignalDetailOut(SignalOut):
     raw_response: dict[str, Any] | None = None
+    model_input: dict[str, Any] | None = None
 
 
 class RiskDecisionOut(BaseModel):

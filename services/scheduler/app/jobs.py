@@ -126,8 +126,7 @@ async def _run_locked_cycle(
         ).first() is not None
 
         llm_config = await load_effective_llm_config(session)
-        llm_result = await _request_signal(
-            http_client,
+        payload = _build_analyze_payload(
             settings,
             symbol=symbol,
             candle_ts_ms=candle_ts_ms,
@@ -137,6 +136,7 @@ async def _run_locked_cycle(
             has_open_position=has_open_position,
             llm_config=llm_config,
         )
+        llm_result = await _post_analyze(http_client, settings, payload)
 
         signal_row = Signal(
             trace_id=trace_id,
@@ -148,6 +148,7 @@ async def _run_locked_cycle(
             reasoning=llm_result["reasoning"],
             model_name=llm_result["model_name"],
             raw_response=llm_result.get("raw_response"),
+            model_input={k: v for k, v in payload.items() if k != "provider_override"},
             price=Decimal(str(latest["c"])),
             atr_14=Decimal(str(indicators["atr_14"])),
             status=SignalStatus.PENDING.value,
@@ -163,8 +164,7 @@ async def _run_locked_cycle(
     return trace_id
 
 
-async def _request_signal(
-    http_client: httpx.AsyncClient | None,
+def _build_analyze_payload(
     settings: SchedulerSettings,
     *,
     symbol: str,
@@ -175,15 +175,12 @@ async def _request_signal(
     has_open_position: bool,
     llm_config: EffectiveLLMConfig,
 ) -> dict:
-    """Calls the LLM Analysis Service's `/analyze` (PROJECT.md Section 8).
-    The service itself always resolves model-level failures to a `HOLD`
-    Signal (200 OK) — the only failure this needs to handle is the HTTP
-    call itself failing (service down, timeout, malformed body), matching
-    the sequence diagram's "LLM timeout / malformed JSON / provider error"
-    branch from the Scheduler's point of view."""
-    owns_client = http_client is None
-    http_client = http_client or httpx.AsyncClient(timeout=settings.llm_request_timeout_seconds)
-    payload = {
+    """Builds the exact `/analyze` request body (PROJECT.md Section 8.1).
+    Pure/no I/O so it can double as what gets persisted onto
+    `Signal.model_input` (minus `provider_override` — routing metadata, not
+    part of what the LLM actually saw, same exclusion `build_user_prompt()`
+    applies)."""
+    return {
         "symbol": symbol,
         "timeframe": settings.timeframe,
         "candle_close_time": (
@@ -205,12 +202,27 @@ async def _request_signal(
         "position_context": {"has_open_position": has_open_position, "unrealized_pnl_pct": None},
         "provider_override": llm_config.model_dump(),
     }
+
+
+async def _post_analyze(
+    http_client: httpx.AsyncClient | None, settings: SchedulerSettings, payload: dict
+) -> dict:
+    """Calls the LLM Analysis Service's `/analyze` (PROJECT.md Section 8).
+    The service itself always resolves model-level failures to a `HOLD`
+    Signal (200 OK) — the only failure this needs to handle is the HTTP
+    call itself failing (service down, timeout, malformed body), matching
+    the sequence diagram's "LLM timeout / malformed JSON / provider error"
+    branch from the Scheduler's point of view."""
+    owns_client = http_client is None
+    http_client = http_client or httpx.AsyncClient(timeout=settings.llm_request_timeout_seconds)
     try:
         response = await http_client.post(settings.llm_service_url, json=payload)
         response.raise_for_status()
         return response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("llm_service_unreachable", extra={"symbol": symbol, "error": str(exc)})
+        logger.warning(
+            "llm_service_unreachable", extra={"symbol": payload["symbol"], "error": str(exc)}
+        )
         return {
             "action": Action.HOLD.value,
             "confidence": 0.0,

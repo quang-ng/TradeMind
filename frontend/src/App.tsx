@@ -732,7 +732,42 @@ function DetailDrawer({ apiKey, detail, onClose }: { apiKey: string; detail: Exc
     return () => { active = false }
   }, [apiKey, detail])
   const events = timeline ? buildTimeline(timeline) : []
-  return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose} aria-label="Close details" /><aside className="drawer"><header><div><span className="eyebrow">{detail.kind === 'signal' ? 'SIGNAL DETAIL' : 'AUDIT TIMELINE'}</span><h2>{detail.kind === 'signal' ? 'Raw model response' : `Trace ${shortId(detail.id)}`}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></header><div className="drawer-body">{error && <div className="form-error">{error}</div>}{!signal && !timeline && !error && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading detail…</div>}{signal && <><div className="detail-hero"><Coin symbol={signal.symbol} /><div><strong>{signal.symbol} · {signal.timeframe}</strong><span>{dateTime(signal.created_at)}</span></div><ActionBadge action={signal.action} large /></div><dl className="detail-list"><div><dt>Confidence</dt><dd>{Math.round(Number(signal.confidence) * 100)}%</dd></div><div><dt>Price</dt><dd>{money(signal.price)}</dd></div><div><dt>ATR (14)</dt><dd>{money(signal.atr_14)}</dd></div><div><dt>Status</dt><dd>{readable(signal.status)}</dd></div><div><dt>Model</dt><dd>{signal.model_name}</dd></div><div><dt>Trace ID</dt><dd className="mono">{signal.trace_id}</dd></div></dl><h3>Validated reasoning</h3><div className="reason-box">{signal.reasoning}</div><h3>Raw provider response</h3><pre>{JSON.stringify(signal.raw_response, null, 2)}</pre></>}{timeline && <>{events.length ? <div className="timeline">{events.map((event, index) => <div className="timeline-item" key={`${event.type}-${index}`}><div className={`timeline-marker ${event.tone}`}>{event.icon}</div><div><span>{dateTime(event.at)}</span><strong>{event.title}</strong><p>{event.detail}</p>{event.payload && <details><summary>Event payload</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></div>)}</div> : <EmptyState icon={<Clock3 />} title="No events for this trace" text="The audit timeline is currently empty." />}</>}</div></aside></div>
+  return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose} aria-label="Close details" /><aside className="drawer"><header><div><span className="eyebrow">{detail.kind === 'signal' ? 'SIGNAL DETAIL' : 'AUDIT TIMELINE'}</span><h2>{detail.kind === 'signal' ? 'Raw model response' : `Trace ${shortId(detail.id)}`}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></header><div className="drawer-body">{error && <div className="form-error">{error}</div>}{!signal && !timeline && !error && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading detail…</div>}{signal && <><div className="detail-hero"><Coin symbol={signal.symbol} /><div><strong>{signal.symbol} · {signal.timeframe}</strong><span>{dateTime(signal.created_at)}</span></div><ActionBadge action={signal.action} large /></div><dl className="detail-list"><div><dt>Confidence</dt><dd>{Math.round(Number(signal.confidence) * 100)}%</dd></div><div><dt>Price</dt><dd>{money(signal.price)}</dd></div><div><dt>ATR (14)</dt><dd>{money(signal.atr_14)}</dd></div><div><dt>Status</dt><dd>{readable(signal.status)}</dd></div><div><dt>Model</dt><dd>{signal.model_name}</dd></div><div><dt>Trace ID</dt><dd className="mono">{signal.trace_id}</dd></div></dl><h3>Validated reasoning</h3><div className="reason-box">{signal.reasoning}</div><ModelInputSection input={signal.model_input} /><h3>Raw provider response</h3><pre>{JSON.stringify(signal.raw_response, null, 2)}</pre></>}{timeline && <>{events.length ? <div className="timeline">{events.map((event, index) => <div className="timeline-item" key={`${event.type}-${index}`}><div className={`timeline-marker ${event.tone}`}>{event.icon}</div><div><span>{dateTime(event.at)}</span><strong>{event.title}</strong><p>{event.detail}</p>{event.payload && <details><summary>Event payload</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></div>)}</div> : <EmptyState icon={<Clock3 />} title="No events for this trace" text="The audit timeline is currently empty." />}</>}</div></aside></div>
+}
+
+interface ModelInputShape {
+  ohlcv?: { t: string; o: number; h: number; l: number; c: number; v: number }[]
+  indicators?: {
+    rsi_14?: number
+    ema_50?: number
+    ema_200?: number
+    atr_14?: number
+    volume_sma_20?: number
+    macd?: { macd?: number; signal?: number; histogram?: number }
+  }
+  sentiment?: { score?: number; state?: string; confidence?: number; reasons?: string[] }
+  position_context?: { has_open_position?: boolean; unrealized_pnl_pct?: number | null }
+}
+
+function ModelInputSection({ input }: { input?: Record<string, unknown> | null }) {
+  if (!input) return <><h3>Model input</h3><p className="muted">Not captured for this signal.</p></>
+  const { indicators, sentiment, position_context: position, ohlcv } = input as ModelInputShape
+  return (
+    <>
+      <h3>Model input</h3>
+      <dl className="detail-list">
+        <div><dt>RSI (14)</dt><dd>{indicators?.rsi_14?.toFixed(1) ?? '—'}</dd></div>
+        <div><dt>EMA 50</dt><dd>{indicators?.ema_50 !== undefined ? money(indicators.ema_50) : '—'}</dd></div>
+        <div><dt>EMA 200</dt><dd>{indicators?.ema_200 !== undefined ? money(indicators.ema_200) : '—'}</dd></div>
+        <div><dt>MACD histogram</dt><dd>{indicators?.macd?.histogram?.toFixed(2) ?? '—'}</dd></div>
+        <div><dt>ATR (14)</dt><dd>{indicators?.atr_14 !== undefined ? money(indicators.atr_14) : '—'}</dd></div>
+        <div><dt>Volume SMA (20)</dt><dd>{indicators?.volume_sma_20?.toFixed(2) ?? '—'}</dd></div>
+        <div><dt>Sentiment</dt><dd>{sentiment ? `${readable(sentiment.state ?? null)} (${sentiment.score})` : '—'}</dd></div>
+        <div><dt>Open position</dt><dd>{position?.has_open_position ? 'Yes' : 'No'}</dd></div>
+      </dl>
+      <details><summary>Full input payload ({ohlcv?.length ?? 0} candles)</summary><pre>{JSON.stringify(input, null, 2)}</pre></details>
+    </>
+  )
 }
 
 function buildTimeline(timeline: AuditTimeline) {

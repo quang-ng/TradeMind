@@ -29,6 +29,7 @@ export interface Signal {
   status: string
   created_at: string
   raw_response?: Record<string, unknown> | null
+  model_input?: Record<string, unknown> | null
 }
 
 export interface Decision {
