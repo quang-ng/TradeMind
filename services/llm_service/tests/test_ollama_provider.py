@@ -35,6 +35,7 @@ async def test_generate_posts_chat_request_without_grammar_constrained_format():
     assert "format" not in captured["body"]
     assert captured["body"]["keep_alive"] == "90m"
     assert captured["body"]["stream"] is False
+    assert captured["body"]["options"] == {"temperature": 0.4, "num_predict": 220}
 
 
 async def test_model_property_returns_configured_model():

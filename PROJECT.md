@@ -595,6 +595,17 @@ Rules:
 - Respond with ONLY the JSON object described by the schema. No prose outside it.
 - If the signal is ambiguous, conflicting, or low-conviction, respond HOLD.
 - Never invent indicator values that were not provided.
+- Interpret actions using the long-only position context: BUY may only open a
+  new position when `has_open_position=false`; SELL may only close an existing
+  position when `has_open_position=true`; bearish evidence with no position is
+  HOLD.
+- Require at least three independent, directionally aligned confirmations for
+  BUY or SELL. Price/EMA trend and MACD/RSI momentum must be represented;
+  sentiment is advisory and ATR is volatility, so neither counts as directional
+  confirmation.
+- Do not include phrase-rich BUY/SELL/HOLD examples in the production prompt.
+  Small local models can copy their wording and action instead of evaluating
+  the request. State the output fields and decision rubric directly.
 ```
 
 ---

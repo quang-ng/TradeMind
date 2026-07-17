@@ -24,26 +24,44 @@ Rules:
   above 70 is overbought, below 30 is oversold, and 30-70 is neutral (lean
   bullish above 50, bearish below 50 within that band). Do not describe an
   RSI value as overbought or oversold unless it actually crosses 70 or 30.
+- Never reuse stock wording or numbers from these instructions. Cite the
+  actual values in this request and check every comparison before writing it.
 
-The three examples below show the exact JSON shape and level of detail
-required for each action. They are illustrations of FORMAT ONLY — the
-indicator values, action, confidence, and wording in your actual response
-must come from THIS request's data. Copying an example's action, confidence
-number, or reasoning text instead of computing your own from the data given
-is a mistake, even if the real data looks similar to an example.
+Decision rubric — follow it in this order:
 
-Each example is written as a single JSON line on purpose — match that, and
-never split a string value across a literal line break in your own output;
-a real JSON string may only contain a newline as the two characters \n.
+1. Read position_context.has_open_position first. In this long-only system,
+   BUY means opening a position and SELL means closing an existing position.
+   Never return BUY when has_open_position is true. Never return SELL when
+   has_open_position is false; bearish data without a position is HOLD.
+2. When has_open_position is false, return BUY only when at least three
+   independent bullish confirmations agree, including price/trend plus
+   momentum. Useful confirmations are: latest close above EMA50 and EMA200;
+   EMA50 above EMA200; positive MACD histogram with MACD above its signal;
+   RSI between 50 and 70; recent closes making higher highs/lows; and latest
+   volume above volume_sma_20. If fewer than three agree, return HOLD.
+3. When has_open_position is true, return SELL when at least three independent
+   bearish exit confirmations agree. Useful confirmations are: latest close
+   below EMA50 and EMA200; EMA50 below EMA200; negative MACD histogram with
+   MACD below its signal; RSI below 45; recent closes making lower highs/lows;
+   and falling price on latest volume above volume_sma_20. Exits reduce risk,
+   so do not wait for RSI below 30. If fewer than three agree, return HOLD.
+4. Count only facts supported by distinct supplied fields. Sentiment does not
+   count as a confirmation, ATR is volatility rather than direction, and the
+   same EMA relationship must not be counted twice.
+5. Confidence describes evidence agreement: use 0.65-0.85 only when the
+   required confirmations align without material conflict; use 0.40-0.64 for
+   HOLD with mixed or insufficient evidence; use below 0.40 when data quality
+   is weak. Do not assign high confidence merely because RSI is extreme.
 
-Example BUY (bullish momentum, confirmed by volume):
-{"action": "BUY", "confidence": 0.74, "reasoning": "RSI(14) at 61 is rising out of neutral, MACD histogram just turned positive, and price reclaimed the 50 EMA on volume 40% above its 20-period average.", "key_indicators": ["rsi_rising", "macd_bullish_cross", "volume_confirmation"], "invalidation_condition": "A close back below the 50 EMA, or the MACD histogram turning negative again, would invalidate this."}
+Return exactly one single-line JSON object with these five fields:
+- action: "BUY", "SELL", or "HOLD"
+- confidence: number from 0.0 through 1.0
+- reasoning: concise comparison of actual supplied values
+- key_indicators: JSON array of short strings
+- invalidation_condition: non-empty condition using supplied indicators
 
-Example SELL (breakdown, momentum turning down):
-{"action": "SELL", "confidence": 0.69, "reasoning": "Price closed below the 50 EMA with RSI(14) dropping from 58 to 41 over the last three candles, and the MACD histogram is negative and widening.", "key_indicators": ["ema50_breakdown", "rsi_falling", "macd_bearish"], "invalidation_condition": "A reclaim of the 50 EMA with RSI(14) back above 50 would invalidate this."}
-
-Example HOLD (no clear edge in either direction):
-{"action": "HOLD", "confidence": 0.52, "reasoning": "RSI(14) at 48 is neutral; price is chopping between the 50 and 200 EMA with no clear trend.", "key_indicators": ["rsi_neutral", "ema_chop"], "invalidation_condition": "A close above the 50 EMA with rising volume would shift bias toward BUY; a close below the 200 EMA would shift bias toward SELL."}"""
+Do not split a string across a literal line break. Do not add markdown or any
+text outside the JSON object."""
 
 
 def build_user_prompt(request: AnalyzeRequest) -> str:

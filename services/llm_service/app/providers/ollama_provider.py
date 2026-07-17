@@ -52,7 +52,14 @@ class OllamaProvider(Provider):
                     {"role": "user", "content": user_prompt},
                 ],
                 "stream": False,
-                "options": {"temperature": self._temperature},
+                "options": {
+                    "temperature": self._temperature,
+                    # Valid responses are normally ~100-160 tokens. A hard
+                    # ceiling prevents a small local model from rambling
+                    # until the service-wide 60s timeout and turning an
+                    # otherwise usable cycle into a technical HOLD.
+                    "num_predict": 220,
+                },
                 # Cycles run hourly (PROJECT.md Section 5); Ollama's default
                 # keep_alive (5m) would unload the model between every
                 # cycle, paying the full model-load cost on each call. Keep
