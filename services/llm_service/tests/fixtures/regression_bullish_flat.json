@@ -1,0 +1,25 @@
+{
+  "symbol": "BTC/USDT",
+  "timeframe": "1h",
+  "candle_close_time": "2026-07-17T02:00:00Z",
+  "ohlcv": [
+    {"t": "2026-07-16T22:00:00Z", "o": 63500, "h": 63820, "l": 63480, "c": 63780, "v": 700},
+    {"t": "2026-07-16T23:00:00Z", "o": 63780, "h": 64120, "l": 63720, "c": 64060, "v": 780},
+    {"t": "2026-07-17T00:00:00Z", "o": 64060, "h": 64420, "l": 64020, "c": 64360, "v": 850},
+    {"t": "2026-07-17T01:00:00Z", "o": 64360, "h": 64820, "l": 64310, "c": 64750, "v": 1100}
+  ],
+  "indicators": {
+    "rsi_14": 61.4,
+    "ema_50": 64120.0,
+    "ema_200": 63680.0,
+    "macd": {"macd": 185.0, "signal": 121.0, "histogram": 64.0},
+    "atr_14": 310.0,
+    "volume_sma_20": 820.0
+  },
+  "position_context": {"has_open_position": false, "unrealized_pnl_pct": null},
+  "provider_override": {
+    "llm_provider": "ollama",
+    "ollama_model": "qwen2.5:7b",
+    "ollama_temperature": 0.3
+  }
+}

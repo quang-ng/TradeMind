@@ -1,7 +1,10 @@
 import json
+from pathlib import Path
 
 from llm_service.app.prompts.v1 import SYSTEM_PROMPT_V1, build_user_prompt
 from llm_service.app.schemas import AnalyzeRequest, ProviderOverride
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _base_request(**overrides) -> AnalyzeRequest:
@@ -137,3 +140,28 @@ def test_bearish_open_position_fixture_reaches_model_with_exit_context():
     assert parsed["ohlcv"][-1]["c"] < parsed["indicators"]["ema_200"]
     assert parsed["indicators"]["rsi_14"] < 45
     assert parsed["indicators"]["macd"]["histogram"] < 0
+
+
+def test_live_regression_fixtures_encode_unambiguous_rubric_cases():
+    bearish = AnalyzeRequest.model_validate_json(
+        (FIXTURES / "regression_bearish_open.json").read_text()
+    )
+    bullish = AnalyzeRequest.model_validate_json(
+        (FIXTURES / "regression_bullish_flat.json").read_text()
+    )
+
+    bearish_close = bearish.ohlcv[-1].c
+    assert bearish.position_context.has_open_position is True
+    assert bearish_close < bearish.indicators.ema_50
+    assert bearish_close < bearish.indicators.ema_200
+    assert bearish.indicators.rsi_14 < 45
+    assert bearish.indicators.macd.histogram < 0
+    assert bearish.ohlcv[-1].v > bearish.indicators.volume_sma_20
+
+    bullish_close = bullish.ohlcv[-1].c
+    assert bullish.position_context.has_open_position is False
+    assert bullish_close > bullish.indicators.ema_50
+    assert bullish_close > bullish.indicators.ema_200
+    assert 50 < bullish.indicators.rsi_14 < 70
+    assert bullish.indicators.macd.histogram > 0
+    assert bullish.ohlcv[-1].v > bullish.indicators.volume_sma_20
