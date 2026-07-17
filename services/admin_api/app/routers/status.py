@@ -33,7 +33,7 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
         .all()
     )
 
-    equity_usdt = AccountSettings().starting_equity_usdt
+    starting_equity_usdt = AccountSettings().starting_equity_usdt
     today = datetime.now(timezone.utc).date()
     closed_positions = (
         (
@@ -44,6 +44,14 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
         .scalars()
         .all()
     )
+    total_realized_pnl_usdt = sum(
+        (position.pnl_usdt or Decimal("0") for position in closed_positions),
+        start=Decimal("0"),
+    )
+    # Realized P&L only — unrealized P&L on open positions and real Freqtrade
+    # fees/slippage still require the live balance query AccountSettings'
+    # docstring defers to Phase 3.
+    equity_usdt = starting_equity_usdt + total_realized_pnl_usdt
     daily_pnl_usdt = sum(
         (
             position.pnl_usdt or Decimal("0")
