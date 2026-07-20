@@ -226,3 +226,4 @@ docker-compose.override.yml
 frontend/node_modules/
 frontend/dist/
 INTERVIEW_DEMO_SCRIPT.md
+reports/
