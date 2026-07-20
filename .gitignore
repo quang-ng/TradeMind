@@ -1,4 +1,5 @@
 backups/
+scripts/backtest/.data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
