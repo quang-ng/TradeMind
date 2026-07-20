@@ -640,6 +640,8 @@ Defaults live in a single versioned config object, editable only via `PATCH /con
 `max_open_positions` is the sole runtime authority for the number of concurrent
 positions. Freqtrade is configured with `max_open_trades = -1` so it does not
 maintain a second, static limit that can diverge from an audited UI update.
+Its finite `stake_amount` is only a configuration-valid fallback; every entry
+uses the Risk Engine's explicit, deterministic `stakeamount` from Section 9.2.
 This does not bypass risk controls: Freqtrade has no autonomous entry logic and
 only the Risk Engine may call its authenticated `forceenter` endpoint after all
 rules below pass. Pair uniqueness, total exposure, sizing, and available balance

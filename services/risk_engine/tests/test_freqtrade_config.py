@@ -18,3 +18,4 @@ def test_freqtrade_does_not_duplicate_runtime_position_limit() -> None:
 
     assert RiskConfig().max_open_positions == 2
     assert rendered["max_open_trades"] == -1
+    assert isinstance(rendered["stake_amount"], (int, float))
