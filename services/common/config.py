@@ -71,7 +71,10 @@ class RiskConfig(BaseSettings):
     # the weakest 3-confirmation BUYs while still admitting anything with
     # either a 4th confirmation or genuine model conviction.
     min_confidence: Decimal = Decimal("0.70")
-    signal_max_age_minutes: int = 10
+    # A 16-symbol CPU-bound cycle is staggered across roughly 18 minutes.
+    # Measure from the closed candle's actual close time and leave enough
+    # room for the final symbol's bounded inference/queue delay.
+    signal_max_age_minutes: int = 25
     atr_stop_multiplier: Decimal = Decimal("2.0")
     min_stop_loss_pct: Decimal = Decimal("0.015")
     max_stop_loss_pct: Decimal = Decimal("0.08")

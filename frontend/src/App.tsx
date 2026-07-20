@@ -704,8 +704,40 @@ function LLMConfigPage({ apiKey, data, onUpdated }: { apiKey: string; data: Dash
 }
 
 function PositionCard({ position }: { position: Position }) {
-  const notional = Number(position.entry_price) * Number(position.amount)
-  return <article className="position-card"><header><Coin symbol={position.symbol} /><div><strong>{position.symbol}</strong><span>Opened {timeAgo(position.opened_at)}</span></div><span className="open-badge">OPEN</span></header><div className="position-value"><span>Position value</span><strong>{money(notional)}</strong></div><div className="position-facts"><span>Entry price<strong>{money(position.entry_price)}</strong></span><span>Amount<strong>{compactNumber(position.amount)}</strong></span><span>Entry order<strong className="mono">{shortId(position.entry_order_id)}</strong></span></div></article>
+  const entryValue = Number(position.entry_price) * Number(position.amount)
+  const currentValue = position.current_value_usdt === null
+    ? entryValue
+    : Number(position.current_value_usdt)
+  const pnl = position.unrealized_pnl_usdt === null
+    ? null
+    : Number(position.unrealized_pnl_usdt)
+  const pnlTone = pnl !== null && pnl < 0 ? 'negative-text' : 'positive-text'
+  return (
+    <article className="position-card">
+      <header>
+        <Coin symbol={position.symbol} />
+        <div><strong>{position.symbol}</strong><span>Opened {timeAgo(position.opened_at)}</span></div>
+        <span className="open-badge">OPEN</span>
+      </header>
+      <div className="position-value">
+        <span>Current value</span>
+        <strong>{money(currentValue)}</strong>
+      </div>
+      <div className="position-pnl">
+        <span>Unrealized P&amp;L <small>before exit fees</small></span>
+        <strong className={pnl === null ? undefined : pnlTone}>
+          {pnl === null ? 'Awaiting market mark' : `${pnl >= 0 ? '+' : ''}${money(pnl)} (${percent(position.unrealized_pnl_pct)})`}
+        </strong>
+      </div>
+      <div className="position-facts">
+        <span>Entry price<strong>{money(position.entry_price)}</strong></span>
+        <span>Current price<strong>{money(position.current_price)}</strong></span>
+        <span>Amount<strong>{compactNumber(position.amount)}</strong></span>
+        <span>Entry order<strong className="mono">{shortId(position.entry_order_id)}</strong></span>
+      </div>
+      {position.price_updated_at && <p className="position-updated">Market mark: {dateTime(position.price_updated_at)}</p>}
+    </article>
+  )
 }
 
 function KillSwitchDialog({ apiKey, currentlyEnabled, onClose, onChanged }: { apiKey: string; currentlyEnabled: boolean; onClose: () => void; onChanged: () => void }) {

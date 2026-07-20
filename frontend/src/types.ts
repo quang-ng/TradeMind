@@ -75,6 +75,11 @@ export interface Position {
   pnl_pct: string | null
   opened_at: string
   closed_at: string | null
+  current_price: string | null
+  current_value_usdt: string | null
+  unrealized_pnl_usdt: string | null
+  unrealized_pnl_pct: string | null
+  price_updated_at: string | null
 }
 
 export interface AuditEvent {

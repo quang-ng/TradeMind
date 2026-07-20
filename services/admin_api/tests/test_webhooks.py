@@ -272,6 +272,54 @@ async def test_exit_fill_closes_position(db_session_factory):
         assert position.exit_price == Decimal("61000")
 
 
+async def test_autonomous_roi_exit_creates_order_and_closes_position(db_session_factory):
+    entry_order_id = await _seed_submitted_entry_order(
+        db_session_factory, symbol="BTC/USDT", trade_id=42
+    )
+    async with db_session_factory() as session:
+        entry_order = await session.get(Order, entry_order_id)
+        entry_order.status = OrderStatus.FILLED.value
+        entry_order.filled_amount = Decimal("0.0083")
+        entry_order.avg_price = Decimal("60000")
+        position = Position(
+            symbol="BTC/USDT",
+            status=PositionStatus.OPEN.value,
+            entry_order_id=entry_order.id,
+            entry_price=Decimal("60000"),
+            amount=Decimal("0.0083"),
+        )
+        session.add(position)
+        await session.commit()
+        position_id = position.id
+
+    async with await _client() as client:
+        response = await client.post(
+            "/webhooks/freqtrade",
+            json={
+                "event": "exit_fill",
+                "trade_id": 42,
+                "pair": "BTC/USDT",
+                "secret": WEBHOOK_SECRET,
+                "close_rate": "61000",
+                "amount": "0.0083",
+                "profit_amount": "7.3",
+                "profit_ratio": "0.0146",
+                "close_date": "2026-07-15T15:00:00+00:00",
+                "exit_reason": "roi",
+            },
+        )
+    assert response.status_code == 204
+
+    async with db_session_factory() as session:
+        position = await session.get(Position, position_id)
+        assert position.status == PositionStatus.CLOSED.value
+        assert position.pnl_usdt == Decimal("7.3")
+        exit_order = await session.get(Order, position.exit_order_id)
+        assert exit_order.side == "SELL"
+        assert exit_order.status == OrderStatus.FILLED.value
+        assert exit_order.freqtrade_trade_id == 42
+
+
 async def test_unknown_trade_id_is_a_noop(db_session_factory):
     async with await _client() as client:
         response = await client.post(

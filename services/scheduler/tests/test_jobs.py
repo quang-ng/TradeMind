@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
@@ -189,7 +190,12 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     assert jobs.redis_keys.cycle_lock("BTC/USDT") in redis_client.deleted
 
     signal_row = captured_session.added[0]
+    expected_close_ms = candles[-1]["t"] + jobs.timeframe_to_seconds(settings.timeframe) * 1000
+    assert signal_row.candle_ts == datetime.fromtimestamp(
+        expected_close_ms / 1000, tz=timezone.utc
+    )
     assert signal_row.model_input is not None
+    assert signal_row.model_input["candle_close_time"] == signal_row.candle_ts.isoformat()
     assert set(signal_row.model_input) == {
         "symbol",
         "timeframe",

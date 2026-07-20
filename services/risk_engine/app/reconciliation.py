@@ -79,7 +79,103 @@ async def reconcile_submitted_orders(
         else:
             await _alert_once(session, order, "remote_state_ambiguous")
 
+    reconciled += await _reconcile_open_positions(session, freqtrade_client, now=now)
     await session.commit()
+    return reconciled
+
+
+async def _reconcile_open_positions(
+    session: AsyncSession, freqtrade_client: FreqtradeClient, *, now: datetime
+) -> int:
+    """Close audit positions that Freqtrade already closed via ROI/stop-loss.
+
+    Those exits are autonomous safety behavior and therefore have no
+    pre-existing TradeMind SELL order for submitted-order reconciliation to
+    discover. The entry order's trade id is the stable cross-system key.
+    """
+    rows = (
+        await session.execute(
+            select(Position, Order)
+            .join(Order, Position.entry_order_id == Order.id)
+            .where(
+                Position.status == PositionStatus.OPEN.value,
+                Order.freqtrade_trade_id.is_not(None),
+                Order.side == OrderSide.BUY.value,
+            )
+        )
+    ).all()
+    reconciled = 0
+    for position, entry_order in rows:
+        assert entry_order.freqtrade_trade_id is not None
+        try:
+            trade = await freqtrade_client.get_trade(trade_id=entry_order.freqtrade_trade_id)
+        except FreqtradeUnavailable as exc:
+            logger.warning(
+                "position_reconciliation_lookup_failed",
+                extra={
+                    "trace_id": str(entry_order.trace_id),
+                    "position_id": str(position.id),
+                    "error": str(exc),
+                },
+            )
+            await _alert_once(session, entry_order, "freqtrade_position_lookup_failed")
+            continue
+        if trade.pair != position.symbol:
+            await _alert_once(session, entry_order, "freqtrade_position_pair_mismatch")
+            continue
+        if trade.is_open:
+            continue
+        if trade.close_rate is None or trade.amount is None:
+            await _alert_once(session, entry_order, "position_exit_fields_missing")
+            continue
+
+        exit_order = Order(
+            trace_id=entry_order.trace_id,
+            risk_decision_id=entry_order.risk_decision_id,
+            freqtrade_trade_id=trade.trade_id,
+            symbol=position.symbol,
+            side=OrderSide.SELL.value,
+            status=OrderStatus.FILLED.value,
+            requested_amount=position.amount,
+            filled_amount=trade.amount,
+            avg_price=trade.close_rate,
+            dry_run=entry_order.dry_run,
+        )
+        session.add(exit_order)
+        await session.flush()
+        position.exit_order_id = exit_order.id
+        position.status = PositionStatus.CLOSED.value
+        position.exit_price = trade.close_rate
+        position.pnl_usdt = trade.profit_abs
+        position.pnl_pct = trade.profit_ratio
+        position.closed_at = trade.close_date or now
+        session.add(
+            AuditEvent(
+                trace_id=entry_order.trace_id,
+                event_type=AuditEventType.ORDER_FILLED.value,
+                payload={
+                    "order_id": str(exit_order.id),
+                    "trade_id": trade.trade_id,
+                    "pair": position.symbol,
+                    "side": OrderSide.SELL.value,
+                    "source": "position_reconciliation",
+                },
+            )
+        )
+        session.add(
+            AuditEvent(
+                trace_id=entry_order.trace_id,
+                event_type=AuditEventType.POSITION_CLOSED.value,
+                payload={
+                    "order_id": str(exit_order.id),
+                    "trade_id": trade.trade_id,
+                    "pair": position.symbol,
+                    "pnl_usdt": str(trade.profit_abs) if trade.profit_abs is not None else None,
+                    "source": "position_reconciliation",
+                },
+            )
+        )
+        reconciled += 1
     return reconciled
 
 

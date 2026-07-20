@@ -23,6 +23,7 @@ class FreqtradeWebhookPayload(BaseModel):
     profit_amount: Decimal | None = None
     profit_ratio: Decimal | None = None
     close_date: str | None = None
+    exit_reason: str | None = None
 
 
 # --- Read models (PROJECT.md Section 7) -----------------------------------
@@ -103,6 +104,11 @@ class PositionOut(BaseModel):
     pnl_pct: Decimal | None
     opened_at: datetime
     closed_at: datetime | None
+    current_price: Decimal | None = None
+    current_value_usdt: Decimal | None = None
+    unrealized_pnl_usdt: Decimal | None = None
+    unrealized_pnl_pct: Decimal | None = None
+    price_updated_at: datetime | None = None
 
 
 class AuditEventOut(BaseModel):

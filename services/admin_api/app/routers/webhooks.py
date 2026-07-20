@@ -147,12 +147,50 @@ async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayl
     order = await _find_order(
         session, trade_id=payload.trade_id, pair=payload.pair, side=OrderSide.SELL.value
     )
-    if order is None or payload.close_rate is None or payload.amount is None:
+    if payload.close_rate is None or payload.amount is None:
         logger.warning(
             "exit_fill_no_matching_order",
             extra={"trade_id": payload.trade_id, "pair": payload.pair},
         )
         return
+
+    # ROI and stop-loss are Freqtrade-owned safety exits, so no TradeMind
+    # SELL order exists before their webhook arrives. Anchor a synthetic,
+    # fully-audited exit order to the entry decision/trace in that case.
+    if order is None:
+        match = (
+            await session.execute(
+                select(Position, Order)
+                .join(Order, Position.entry_order_id == Order.id)
+                .where(
+                    Position.symbol == payload.pair,
+                    Position.status == PositionStatus.OPEN.value,
+                    Order.freqtrade_trade_id == payload.trade_id,
+                    Order.side == OrderSide.BUY.value,
+                )
+            )
+        ).first()
+        if match is None:
+            logger.warning(
+                "exit_fill_no_matching_order",
+                extra={"trade_id": payload.trade_id, "pair": payload.pair},
+            )
+            return
+        position, entry_order = match
+        order = Order(
+            trace_id=entry_order.trace_id,
+            risk_decision_id=entry_order.risk_decision_id,
+            freqtrade_trade_id=payload.trade_id,
+            symbol=payload.pair,
+            side=OrderSide.SELL.value,
+            status=OrderStatus.FILLED.value,
+            requested_amount=position.amount,
+            filled_amount=payload.amount,
+            avg_price=payload.close_rate,
+            dry_run=entry_order.dry_run,
+        )
+        session.add(order)
+        await session.flush()
 
     order.status = OrderStatus.FILLED
     order.filled_amount = payload.amount
@@ -188,7 +226,13 @@ async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayl
         AuditEvent(
             trace_id=order.trace_id,
             event_type=AuditEventType.ORDER_FILLED.value,
-            payload={"trade_id": payload.trade_id, "pair": payload.pair, "side": "SELL"},
+            payload={
+                "trade_id": payload.trade_id,
+                "pair": payload.pair,
+                "side": "SELL",
+                "source": "freqtrade_webhook",
+                "exit_reason": payload.exit_reason,
+            },
         )
     )
     pnl_usdt = str(payload.profit_amount) if payload.profit_amount is not None else None
@@ -196,7 +240,13 @@ async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayl
         AuditEvent(
             trace_id=order.trace_id,
             event_type=AuditEventType.POSITION_CLOSED.value,
-            payload={"trade_id": payload.trade_id, "pair": payload.pair, "pnl_usdt": pnl_usdt},
+            payload={
+                "trade_id": payload.trade_id,
+                "pair": payload.pair,
+                "pnl_usdt": pnl_usdt,
+                "source": "freqtrade_webhook",
+                "exit_reason": payload.exit_reason,
+            },
         )
     )
 

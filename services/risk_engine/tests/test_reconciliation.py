@@ -177,3 +177,50 @@ async def test_pair_mismatch_fails_closed_and_creates_operator_alert(db_session_
         assert order.filled_amount is None
         assert order.avg_price is None
         assert event.payload["reason"] == "freqtrade_pair_mismatch"
+
+
+async def test_reconciles_autonomous_exit_for_recorded_open_position(db_session_factory):
+    order_id = await _seed_order(db_session_factory, trade_id=42)
+    async with db_session_factory() as session:
+        order = await session.get(Order, order_id)
+        order.status = OrderStatus.FILLED.value
+        order.filled_amount = Decimal("0.01")
+        order.avg_price = Decimal("60000")
+        position = Position(
+            symbol="BTC/USDT",
+            status=PositionStatus.OPEN.value,
+            entry_order_id=order.id,
+            entry_price=Decimal("60000"),
+            amount=Decimal("0.01"),
+            opened_at=NOW - timedelta(hours=4),
+        )
+        session.add(position)
+        await session.commit()
+        position_id = position.id
+
+    client = FakeFreqtradeClient(
+        FreqtradeTrade(
+            trade_id=42,
+            pair="BTC/USDT",
+            is_open=False,
+            amount=Decimal("0.01"),
+            open_rate=Decimal("60000"),
+            close_rate=Decimal("61000"),
+            profit_abs=Decimal("8"),
+            profit_ratio=Decimal("0.016"),
+            close_date=NOW - timedelta(minutes=1),
+        )
+    )
+    async with db_session_factory() as session:
+        count = await reconcile_submitted_orders(
+            session, client, now=NOW, stale_after=timedelta(minutes=10)
+        )
+    assert count == 1
+
+    async with db_session_factory() as session:
+        position = await session.get(Position, position_id)
+        assert position.status == PositionStatus.CLOSED.value
+        assert position.pnl_usdt == Decimal("8")
+        exit_order = await session.get(Order, position.exit_order_id)
+        assert exit_order.side == "SELL"
+        assert exit_order.status == OrderStatus.FILLED.value

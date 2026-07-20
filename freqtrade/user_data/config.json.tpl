@@ -77,7 +77,8 @@
             "event": "exit_fill", "trade_id": "{trade_id}", "pair": "{pair}",
             "close_rate": "{close_rate}", "amount": "{amount}",
             "profit_amount": "{profit_amount}", "profit_ratio": "{profit_ratio}",
-            "close_date": "{close_date}", "secret": "${WEBHOOK_SHARED_SECRET}"
+            "close_date": "{close_date}", "exit_reason": "{exit_reason}",
+            "secret": "${WEBHOOK_SHARED_SECRET}"
         },
         "exit_cancel": {
             "event": "exit_cancel", "trade_id": "{trade_id}", "pair": "{pair}",

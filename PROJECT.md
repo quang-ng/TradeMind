@@ -406,6 +406,13 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `pnl_usdt` / `pnl_pct` | numeric, nullable | Set on close |
 | `opened_at` / `closed_at` | timestamptz | |
 
+`GET /positions` enriches open-position responses with non-persisted
+`current_price`, `current_value_usdt`, `unrealized_pnl_usdt`,
+`unrealized_pnl_pct`, and `price_updated_at` fields derived from the latest
+persisted closed-candle `Signal` for that symbol. These are gross monitoring
+estimates before exit fees, not execution inputs; the operator console must
+show the mark timestamp and never fetch Binance directly.
+
 ### 7.5 AuditEvent (append-only)
 
 | Field | Type | Notes |
@@ -639,8 +646,8 @@ Defaults live in a single versioned config object, editable only via `PATCH /con
   "max_daily_loss_pct": 0.03,
   "consecutive_loss_limit": 3,
   "cooldown_minutes": 120,
-  "min_confidence": 0.65,
-  "signal_max_age_minutes": 10,
+  "min_confidence": 0.70,
+  "signal_max_age_minutes": 25,
   "atr_stop_multiplier": 2.0,
   "min_stop_loss_pct": 0.015,
   "max_stop_loss_pct": 0.08,
@@ -653,8 +660,8 @@ Defaults live in a single versioned config object, editable only via `PATCH /con
 | 1 | Kill switch | `killswitch_enabled` | **First gate, always checked first.** Reject everything with `KILLSWITCH_ACTIVE` |
 | 2 | Duplicate signal | Redis `idempotency:decision:{signal_id}` | Reject silently (log only, no duplicate notification) with `DUPLICATE_SIGNAL` |
 | 3 | Signal action | `action != HOLD` | `action = HOLD` is never "rejected" — it's recorded as `approved=false, reason=SIGNAL_WAS_HOLD` and generates no order |
-| 4 | Signal staleness | `signal_max_age_minutes = 10` | If `now - candle_close_time` (plus processing delay) exceeds this, reject with `STALE_SIGNAL` |
-| 5 | Minimum confidence | `min_confidence = 0.65` | Reject with `LOW_CONFIDENCE` |
+| 4 | Signal staleness | `signal_max_age_minutes = 25` | If `now - candle_close_time` (plus processing delay) exceeds this, reject with `STALE_SIGNAL`; 25 minutes covers the configured 16-symbol CPU inference stagger while remaining below one 30-minute candle |
+| 5 | Minimum confidence | `min_confidence = 0.70` | Reject with `LOW_CONFIDENCE` |
 | 6 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
 | 7 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
 | 8 | Max daily loss (circuit breaker) | `max_daily_loss_pct = 3%` | If realized+unrealized daily PnL ≤ `-3%` of equity, **auto-enable the global kill switch** (`SYSTEM` actor) and reject with `DAILY_LOSS_LIMIT_HIT` |
@@ -718,7 +725,7 @@ The Risk Engine is the system's fail-closed authority. This table governs behavi
 | Redis unavailable | Scheduler cannot acquire locks or publish signals → **no new cycles run**. Existing open positions are untouched (Freqtrade manages its own stop-loss independently of Redis) |
 | PostgreSQL unavailable | Risk Engine refuses to evaluate any signal (cannot read account state or write an audit row) → **fail closed, no approvals**. This is a deliberate trade-off: no audit row means no trade, ever |
 | Freqtrade API unreachable at approval time | `RiskDecision(approved=true)` is written, but `Order` is written as `FAILED` with the error; Telegram alerts immediately — this is treated as an operational incident, not a silent retry loop |
-| Freqtrade webhook never arrives (network blip) | Order remains `SUBMITTED`; the Risk Engine reconciliation loop polls Freqtrade's trade-detail API for orders older than 10 minutes. Unambiguous fills are persisted; missing or ambiguous state remains `SUBMITTED` and emits one `RECONCILIATION_REQUIRED` operator alert |
+| Freqtrade webhook never arrives (network blip) | Order remains `SUBMITTED`; the Risk Engine reconciliation loop polls Freqtrade's trade-detail API for orders older than 10 minutes. It also compares every PostgreSQL `OPEN` position with Freqtrade so autonomous ROI/stop-loss exits are recovered even when no TradeMind exit order existed. Unambiguous fills/exits are persisted; missing or ambiguous state remains unchanged and emits one `RECONCILIATION_REQUIRED` operator alert |
 | Binance API errors/rate limits during dry-run simulation | Handled by Freqtrade's own retry/backoff; TradeMind does not add a second retry layer on top (avoids duplicate-order risk) |
 | Telegram unreachable | Logged as a warning; never blocks or delays a trading decision — notification is best-effort, decisioning is not |
 | Any unhandled exception in the Risk Engine evaluation path | Caught at the top level, signal is marked `approved=false, reason=INTERNAL_ERROR`, exception logged with `trace_id`, Telegram alerted. **Never allowed to propagate into an approval by default.** |

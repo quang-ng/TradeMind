@@ -87,14 +87,17 @@ async def _run_locked_cycle(
         logger.warning("insufficient_candles", extra={"symbol": symbol})
         return None
 
-    candle_ts_ms = candles[-1]["t"]
-    idempotency_key = redis_keys.candle_idempotency(symbol, settings.timeframe, str(candle_ts_ms))
     timeframe_seconds = timeframe_to_seconds(settings.timeframe)
+    candle_open_ts_ms = candles[-1]["t"]
+    candle_close_ts_ms = candle_open_ts_ms + timeframe_seconds * 1000
+    idempotency_key = redis_keys.candle_idempotency(
+        symbol, settings.timeframe, str(candle_open_ts_ms)
+    )
     newly_claimed = await redis_client.set(idempotency_key, "1", nx=True, ex=2 * timeframe_seconds)
     if not newly_claimed:
         logger.info(
             "cycle_skipped_already_processed",
-            extra={"symbol": symbol, "candle_ts": candle_ts_ms},
+            extra={"symbol": symbol, "candle_ts": candle_close_ts_ms},
         )
         return None
 
@@ -126,7 +129,10 @@ async def _run_locked_cycle(
         ).scalars().first()
         has_open_position = open_position is not None
         unrealized_pnl_pct = (
-            float((Decimal(str(latest["c"])) - open_position.entry_price) / open_position.entry_price)
+            float(
+                (Decimal(str(latest["c"])) - open_position.entry_price)
+                / open_position.entry_price
+            )
             if open_position is not None
             else None
         )
@@ -135,7 +141,7 @@ async def _run_locked_cycle(
         payload = _build_analyze_payload(
             settings,
             symbol=symbol,
-            candle_ts_ms=candle_ts_ms,
+            candle_ts_ms=candle_close_ts_ms,
             candles=candles,
             indicators=indicators,
             sentiment=sentiment,
@@ -149,7 +155,7 @@ async def _run_locked_cycle(
             trace_id=trace_id,
             symbol=symbol,
             timeframe=settings.timeframe,
-            candle_ts=datetime.fromtimestamp(candle_ts_ms / 1000, tz=timezone.utc),
+            candle_ts=datetime.fromtimestamp(candle_close_ts_ms / 1000, tz=timezone.utc),
             action=llm_result["action"],
             confidence=Decimal(str(llm_result["confidence"])),
             reasoning=llm_result["reasoning"],
