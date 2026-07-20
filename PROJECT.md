@@ -637,6 +637,14 @@ The Risk Engine is a pure, deterministic function of `(signal, account_state, ri
 
 Defaults live in a single versioned config object, editable only via `PATCH /config` (Section 11) and always audited (`CONFIG_CHANGED` event):
 
+`max_open_positions` is the sole runtime authority for the number of concurrent
+positions. Freqtrade is configured with `max_open_trades = -1` so it does not
+maintain a second, static limit that can diverge from an audited UI update.
+This does not bypass risk controls: Freqtrade has no autonomous entry logic and
+only the Risk Engine may call its authenticated `forceenter` endpoint after all
+rules below pass. Pair uniqueness, total exposure, sizing, and available balance
+remain independent gates.
+
 ```json
 {
   "risk_per_trade_pct": 0.01,
