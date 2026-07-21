@@ -568,7 +568,7 @@ Executed on every model response, in order. The first structural failure short-c
 After structural validation, `semantic_validator.py` deterministically enforces the position-aware exit rubric using only the supplied closed candles and indicators. Provider failures and structurally invalid responses never reach this step and remain `HOLD`. For a valid response:
 
 - With no open position, a model-proposed `SELL` is normalized to `HOLD`.
-- With an open position, `SELL` requires both (a) at least three distinct confirmations from the same list encoded in the prompt: price below EMA50 and EMA200; EMA50 below EMA200; bearish MACD (negative histogram and MACD below signal); RSI below 45; lower highs and lower lows across the latest three candles; falling close on volume above SMA20; and (b) `position_context.unrealized_pnl_pct` known and positive. The rubric only ever locks in an existing gain ahead of a reversal — it never forces an exit that would realize a loss, so an unprofitable or unknown-PnL position stays `HOLD` regardless of how many bearish confirmations agree.
+- With an open position, `SELL` requires both (a) at least two confirmations from the list encoded in the prompt, spanning at least two of its three categories — trend (price below EMA50 and EMA200; EMA50 below EMA200), momentum (bearish MACD: negative histogram and MACD below signal; RSI below 45), price action (lower highs and lower lows across the latest three candles; falling close on volume above SMA20) — and (b) `position_context.unrealized_pnl_pct` known and positive. Two confirmations from the same category do not satisfy the rubric: trend and momentum confirmations each move in highly-correlated pairs, so a same-category pair is materially weaker evidence than a cross-category one. The rubric only ever locks in an existing gain ahead of a reversal — it never forces an exit that would realize a loss, so an unprofitable or unknown-PnL position stays `HOLD` regardless of how many bearish confirmations agree.
 - When both conditions hold, the output is normalized to `SELL` even if the model returned `HOLD` or `BUY`. When either is unmet, a model-proposed `SELL` or impossible duplicate `BUY` is normalized to `HOLD`.
 - The raw model response, original action, normalized action, and counted confirmations are all retained in `raw_response`. This is deterministic contract validation inside the isolated analysis service, not execution authority: the resulting `SELL` still passes through Section 9.1.1 and only the Risk Engine may call Freqtrade.
 
@@ -614,7 +614,9 @@ Rules:
   position when `has_open_position=true`; bearish evidence with no position is
   HOLD.
 - Require at least three independent, directionally aligned confirmations for
-  BUY or SELL. Price/EMA trend and MACD/RSI momentum must be represented;
+  BUY. Require at least two for SELL, but spanning at least two of the three
+  confirmation categories (trend, momentum, price action) — not two from the
+  same category. Price/EMA trend and MACD/RSI momentum must be represented;
   sentiment is advisory and ATR is volatility, so neither counts as directional
   confirmation.
 - Do not include phrase-rich BUY/SELL/HOLD examples in the production prompt.
@@ -717,7 +719,9 @@ stop_loss_price = entry_price * (1 - stop_distance_pct)   # long-only, MVP
 
 All monetary and sizing arithmetic uses fixed-point/`Decimal` types — never floating point — to avoid rounding drift in audit figures and order amounts.
 
-Take-profit for the MVP is **not** computed per-trade by the Risk Engine; it is enforced by Freqtrade's static `minimal_roi` table (configured in `freqtrade/user_data/config.json`) as a simple, auditable safety net. Per-trade computed take-profit/reward-risk ratios are a candidate for a later phase, not MVP (Section 2.2).
+Take-profit for the MVP is **not** computed per-trade by the Risk Engine; it is enforced by Freqtrade's static `minimal_roi` table (the `minimal_roi` class attribute on `ExternalSignalStrategy.py` — Freqtrade config.json does not override it here) as a simple, auditable safety net. Per-trade computed take-profit/reward-risk ratios are a candidate for a later phase, not MVP (Section 2.2).
+
+Because this table is the only exit mechanism that fires unconditionally on a timer — the position-aware `SELL` rubric (Section 8.1/8.3) is deliberately conservative and may never trigger within a given trade's lifetime — its tiers are calibrated to the traded pairs' actual hourly volatility (~0.5-0.8% ATR) rather than generic defaults, and its floor is pinned to `min_exit_profit_pct` (`services/llm_service/app/semantic_validator.py`, currently 0.5%) rather than 0%. A floor of literally 0% would let the safety net authorize an exit the deterministic SELL rubric itself would reject as not worth fees/slippage, effectively making the "safety net" the sole and premature exit path for every trade.
 
 **Stop-loss is enforced the same way, for a stricter reason than take-profit's simplicity preference:** Freqtrade's `forceenter` API has no field for a per-trade custom stop-loss — only a strategy-wide static `stoploss` class attribute (`freqtrade/user_data/strategies/ExternalSignalStrategy.py`, set to `-max_stop_loss_pct`, the conservative upper bound). The per-trade, tighter ATR-based `stop_loss_price` this section computes is still persisted to `RiskDecision.stop_loss_price` for audit — rule 12's invariant ("every approved entry carries a stop") is satisfied by the static strategy stoploss, not by that persisted value being mechanically pushed into Freqtrade. Wiring a true per-trade dynamic stop (e.g. via Freqtrade's `custom_stoploss()` callback reading `RiskDecision` from Postgres) is a candidate for a later phase, not MVP.
 

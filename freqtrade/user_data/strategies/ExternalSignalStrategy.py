@@ -23,12 +23,17 @@ class ExternalSignalStrategy(IStrategy):
     timeframe = "1h"
 
     # Take-profit safety net (PROJECT.md Section 9.2) — a simple, auditable
-    # ROI decay table, not a per-trade computed value.
+    # ROI decay table, not a per-trade computed value. Tiers are scaled to
+    # this system's actual hourly ATR (~0.5-0.8% on the traded pairs) rather
+    # than generic defaults, and the floor never drops below
+    # `min_exit_profit_pct` (services/llm_service/app/semantic_validator.py)
+    # — this net must not authorize an exit the deterministic SELL rubric
+    # itself would consider not worth fees/slippage.
     minimal_roi = {
-        "0": 0.10,
-        "60": 0.05,
-        "120": 0.02,
-        "240": 0,
+        "0": 0.025,
+        "90": 0.012,
+        "240": 0.006,
+        "480": 0.005,
     }
     # Conservative static floor — see class docstring.
     stoploss = -0.08

@@ -13,10 +13,10 @@ from risk_engine.app.schemas import AccountState, SignalView
 # Freqtrade runtime.
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
-    0: Decimal("0.10"),
-    60: Decimal("0.05"),
-    120: Decimal("0.02"),
-    240: Decimal("0.00"),
+    0: Decimal("0.025"),
+    90: Decimal("0.012"),
+    240: Decimal("0.006"),
+    480: Decimal("0.005"),
 }
 
 

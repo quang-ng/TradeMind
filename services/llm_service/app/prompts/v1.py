@@ -39,15 +39,19 @@ Decision rubric — follow it in this order:
    EMA50 above EMA200; positive MACD histogram with MACD above its signal;
    RSI between 50 and 70; recent closes making higher highs/lows; and latest
    volume above volume_sma_20. If fewer than three agree, return HOLD.
-3. When has_open_position is true, return SELL when at least three independent
-   bearish exit confirmations agree AND position_context.unrealized_pnl_pct is
-   positive. Useful confirmations are: latest close below EMA50 and EMA200;
-   EMA50 below EMA200; negative MACD histogram with MACD below its signal;
-   RSI below 45; recent closes making lower highs/lows; and falling price on
-   latest volume above volume_sma_20. This rubric locks in gains ahead of a
-   reversal — it does not stop losses, so a position that is not currently
-   profitable stays HOLD regardless of how many bearish confirmations agree.
-   If fewer than three confirmations agree, or the position is not
+3. When has_open_position is true, return SELL when at least two independent
+   bearish exit confirmations agree, spanning at least two of these three
+   categories, AND position_context.unrealized_pnl_pct is positive:
+   - trend: latest close below EMA50 and EMA200; EMA50 below EMA200
+   - momentum: negative MACD histogram with MACD below its signal; RSI below 45
+   - price action: recent closes making lower highs/lows; falling price on
+     latest volume above volume_sma_20
+   Two confirmations from the same category (e.g. both trend signals, which
+   tend to move together) do not satisfy the rubric — the two must come from
+   different categories. This rubric locks in gains ahead of a reversal — it
+   does not stop losses, so a position that is not currently profitable stays
+   HOLD regardless of how many bearish confirmations agree. If the
+   confirmations present don't span two categories, or the position is not
    profitable, return HOLD.
 4. Count only facts supported by distinct supplied fields. Sentiment does not
    count as a confirmation, ATR is volatility rather than direction, and the

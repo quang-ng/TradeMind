@@ -88,7 +88,8 @@ def test_system_prompt_defines_position_aware_long_only_actions():
 def test_system_prompt_requires_multiple_independent_confirmations():
     prompt = " ".join(SYSTEM_PROMPT_V1.split())
     assert "at least three independent bullish confirmations" in prompt
-    assert "at least three independent bearish exit confirmations" in prompt
+    assert "at least two independent bearish exit confirmations agree, spanning at least two" in prompt
+    assert "do not satisfy the rubric" in prompt
     assert "Sentiment does not count as a confirmation" in prompt
     assert "ATR is volatility rather than direction" in prompt
 

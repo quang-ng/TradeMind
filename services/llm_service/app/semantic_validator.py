@@ -32,6 +32,14 @@ def validate_signal_semantics(
     can turn a marginally positive reading at decision time into a net loss
     by fill time once round-trip fees are counted, so the threshold must
     leave a cushion above that, not just above breakeven.
+
+    The confirmation bar is two independent signals spanning two of the
+    three categories in `_CONFIRMATION_CATEGORIES` (trend, momentum, price
+    action), not merely two confirmations from the same category — trend and
+    momentum confirmations each come in highly-correlated pairs (e.g. price
+    below both EMAs and EMA50 below EMA200 tend to move together), so a
+    same-category pair is materially weaker evidence than a cross-category
+    one.
     """
     has_open_position = request.position_context.has_open_position
     is_profitable = (
@@ -39,13 +47,19 @@ def validate_signal_semantics(
         and request.position_context.unrealized_pnl_pct > min_exit_profit_pct
     )
     confirmations = _bearish_exit_confirmations(request) if has_open_position else ()
-    rubric_satisfied = has_open_position and is_profitable and len(confirmations) >= 3
+    confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
+    rubric_satisfied = (
+        has_open_position
+        and is_profitable
+        and len(confirmations) >= 2
+        and len(confirmed_categories) >= 2
+    )
 
     if rubric_satisfied:
         normalized = output.model_copy(
             update={
                 "action": Action.SELL,
-                "confidence": min(0.80, 0.65 + 0.05 * (len(confirmations) - 3)),
+                "confidence": min(0.80, 0.65 + 0.05 * (len(confirmations) - 2)),
                 "reasoning": (
                     f"Deterministic exit rubric found {len(confirmations)} independent "
                     f"bearish confirmations while the position was profitable "
@@ -54,8 +68,9 @@ def validate_signal_semantics(
                 ),
                 "key_indicators": list(confirmations),
                 "invalidation_condition": (
-                    "Fewer than three independent bearish confirmations on a closed "
-                    "candle, or the position is no longer profitable."
+                    "Fewer than two bearish confirmations spanning two different "
+                    "categories (trend, momentum, price action) on a closed candle, "
+                    "or the position is no longer profitable."
                 ),
             }
         )
@@ -83,10 +98,16 @@ def validate_signal_semantics(
             f"exit profit margin ({min_exit_profit_pct:.2%}) — the deterministic exit "
             "rubric only locks in gains net of expected slippage/fees, it does not cut losses."
         )
-    else:
+    elif len(confirmations) < 2:
         reason = (
             "Trade action suppressed because only "
-            f"{len(confirmations)} independent bearish exit confirmations were present."
+            f"{len(confirmations)} independent bearish exit confirmation(s) were present."
+        )
+    else:
+        reason = (
+            "Trade action suppressed because the bearish exit confirmations present "
+            f"({', '.join(confirmations)}) all fall within the same signal category — "
+            "at least two categories (trend, momentum, price action) must agree."
         )
     normalized = output.model_copy(
         update={
@@ -95,8 +116,9 @@ def validate_signal_semantics(
             "reasoning": reason,
             "key_indicators": list(confirmations),
             "invalidation_condition": (
-                "At least three independent bearish confirmations while the position "
-                "is open and profitable."
+                "At least two bearish confirmations spanning two different categories "
+                "(trend, momentum, price action) while the position is open and "
+                "profitable."
             ),
         }
     )
@@ -105,6 +127,20 @@ def validate_signal_semantics(
         action_changed=True,
         exit_confirmations=confirmations,
     )
+
+
+# Groups mirror the prompt's own framing (v1.py rule 3): trend and momentum
+# confirmations each move in highly-correlated pairs, so requiring two
+# categories (not just two confirmations) demands genuinely independent
+# evidence rather than one relationship flipping twice.
+_CONFIRMATION_CATEGORIES = {
+    "price_below_ema50_and_ema200": "trend",
+    "ema50_below_ema200": "trend",
+    "bearish_macd": "momentum",
+    "rsi_below_45": "momentum",
+    "lower_highs_and_lows": "price_action",
+    "falling_price_on_high_volume": "price_action",
+}
 
 
 def _bearish_exit_confirmations(request: AnalyzeRequest) -> tuple[str, ...]:
