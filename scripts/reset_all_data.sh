@@ -74,8 +74,11 @@ done
 # "unable to open database file" and crash-loops on the healthcheck.
 echo "Pre-creating trademind_freqtrade_data with ftuser ownership..."
 docker volume create trademind_freqtrade_data >/dev/null
-docker run --rm -u root -v trademind_freqtrade_data:/freqtrade/db trademind-freqtrade \
-    chown -R ftuser:ftuser /freqtrade/db
+# --entrypoint is required: the image's ENTRYPOINT is /entrypoint.sh, so
+# without this override "chown ..." would be passed to it as arguments
+# (which it ignores) instead of replacing it.
+docker run --rm -u root --entrypoint chown -v trademind_freqtrade_data:/freqtrade/db \
+    trademind-freqtrade -R ftuser:ftuser /freqtrade/db
 
 echo "Starting from a clean slate..."
 "${compose[@]}" up -d --wait --wait-timeout 300
