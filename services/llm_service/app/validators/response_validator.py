@@ -29,8 +29,15 @@ class ResponseValidator:
     let a previously-guaranteed HOLD become a fabricated trade action.
     """
 
-    def __init__(self, *, min_exit_profit_pct: float = 0.005, max_repair_attempts: int = 0):
+    def __init__(
+        self,
+        *,
+        min_exit_profit_pct: float = 0.005,
+        min_exit_loss_pct: float = 0.005,
+        max_repair_attempts: int = 0,
+    ):
         self._min_exit_profit_pct = min_exit_profit_pct
+        self._min_exit_loss_pct = min_exit_loss_pct
         self._max_repair_attempts = max_repair_attempts
 
     async def validate(
@@ -65,7 +72,10 @@ class ResponseValidator:
                 attempt_text = repaired_text
 
         semantic_result = validate_signal_semantics(
-            context, output, min_exit_profit_pct=self._min_exit_profit_pct
+            context,
+            output,
+            min_exit_profit_pct=self._min_exit_profit_pct,
+            min_exit_loss_pct=self._min_exit_loss_pct,
         )
         return ValidationResult(
             is_valid=True,

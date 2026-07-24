@@ -55,6 +55,7 @@ def _build_pipeline(provider: Provider, settings: LLMServiceSettings) -> Analysi
         llm_client=LLMClient(provider, timeout_seconds=settings.analyze_timeout_seconds),
         response_validator=ResponseValidator(
             min_exit_profit_pct=settings.min_exit_profit_pct,
+            min_exit_loss_pct=settings.min_exit_loss_pct,
             max_repair_attempts=settings.max_repair_attempts,
         ),
         signal_generator=SignalGenerator(),

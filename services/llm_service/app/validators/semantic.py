@@ -14,7 +14,11 @@ class SemanticValidationResult:
 
 
 def validate_signal_semantics(
-    context: MarketContext, output: LLMOutput, *, min_exit_profit_pct: float = 0.005
+    context: MarketContext,
+    output: LLMOutput,
+    *,
+    min_exit_profit_pct: float = 0.005,
+    min_exit_loss_pct: float = 0.005,
 ) -> SemanticValidationResult:
     """Enforce the position-aware exit rubric after structural validation.
 
@@ -27,13 +31,18 @@ def validate_signal_semantics(
     rubric, or from proposing an action that is impossible in the current
     position state.
 
-    The rubric only ever forces a profit-taking exit, never a loss-cutting
-    one: `unrealized_pnl_pct` must clear `min_exit_profit_pct`, or the
-    confirmations are ignored and the position is left to HOLD. A bare
-    `> 0` isn't enough — analyze latency plus forceexit execution slippage
-    can turn a marginally positive reading at decision time into a net loss
-    by fill time once round-trip fees are counted, so the threshold must
-    leave a cushion above that, not just above breakeven.
+    The rubric is symmetric: it forces a profit-taking exit once
+    `unrealized_pnl_pct` clears `min_exit_profit_pct`, and separately forces
+    a loss-cutting exit once it falls below `-min_exit_loss_pct` — either
+    way gated on the same cross-category confirmation bar. These two bands
+    can never both hold at once, so at most one of them fires. A bare `> 0`
+    isn't enough for the profit side — analyze latency plus forceexit
+    execution slippage can turn a marginally positive reading at decision
+    time into a net loss by fill time once round-trip fees are counted, so
+    the threshold must leave a cushion above that, not just above breakeven.
+    The loss side exists so a confirmed trend reversal gets cut before
+    riding down to the wider ATR/static stop-loss (PROJECT.md Section 9.2) —
+    it is deliberately not zero, so it doesn't fire on ordinary noise.
 
     The confirmation bar is two independent signals spanning two of the
     three categories in `_CONFIRMATION_CATEGORIES` (trend, momentum, price
@@ -45,36 +54,44 @@ def validate_signal_semantics(
     """
     position = context.position
     has_open_position = position.has_open_position
-    is_profitable = (
-        position.unrealized_pnl_pct is not None
-        and position.unrealized_pnl_pct > min_exit_profit_pct
-    )
+    pnl = position.unrealized_pnl_pct
+    is_profitable = pnl is not None and pnl > min_exit_profit_pct
+    is_losing = pnl is not None and pnl < -min_exit_loss_pct
     confirmations = context.exit_confirmations if has_open_position else ()
     confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
-    rubric_satisfied = (
-        has_open_position
-        and is_profitable
-        and len(confirmations) >= 2
-        and len(confirmed_categories) >= 2
-    )
+    confirmations_sufficient = len(confirmations) >= 2 and len(confirmed_categories) >= 2
 
-    if rubric_satisfied:
+    if has_open_position and confirmations_sufficient and (is_profitable or is_losing):
+        if is_profitable:
+            reasoning = (
+                f"Deterministic exit rubric found {len(confirmations)} independent "
+                f"bearish confirmations while the position was profitable "
+                f"({pnl:.2%}): {', '.join(confirmations)}."
+            )
+            invalidation_condition = (
+                "Fewer than two bearish confirmations spanning two different "
+                "categories (trend, momentum, price action) on a closed candle, "
+                "or the position is no longer profitable."
+            )
+        else:
+            reasoning = (
+                f"Deterministic loss-cut rubric found {len(confirmations)} independent "
+                f"bearish confirmations while the position was losing ({pnl:.2%}): "
+                f"{', '.join(confirmations)}. Cutting now rather than riding down to "
+                "the wider ATR/static stop-loss."
+            )
+            invalidation_condition = (
+                "Fewer than two bearish confirmations spanning two different "
+                "categories (trend, momentum, price action) on a closed candle, "
+                "or the loss no longer clears the loss-cut threshold."
+            )
         normalized = output.model_copy(
             update={
                 "action": Action.SELL,
                 "confidence": min(0.80, 0.65 + 0.05 * (len(confirmations) - 2)),
-                "reasoning": (
-                    f"Deterministic exit rubric found {len(confirmations)} independent "
-                    f"bearish confirmations while the position was profitable "
-                    f"({position.unrealized_pnl_pct:.2%}): "
-                    f"{', '.join(confirmations)}."
-                ),
+                "reasoning": reasoning,
                 "key_indicators": list(confirmations),
-                "invalidation_condition": (
-                    "Fewer than two bearish confirmations spanning two different "
-                    "categories (trend, momentum, price action) on a closed candle, "
-                    "or the position is no longer profitable."
-                ),
+                "invalidation_condition": invalidation_condition,
             }
         )
         return SemanticValidationResult(
@@ -95,11 +112,19 @@ def validate_signal_semantics(
 
     if not has_open_position:
         reason = "SELL suppressed because there is no open position."
-    elif not is_profitable:
+    elif pnl is None:
         reason = (
-            "Trade action suppressed because the position does not clear the minimum "
-            f"exit profit margin ({min_exit_profit_pct:.2%}) — the deterministic exit "
-            "rubric only locks in gains net of expected slippage/fees, it does not cut losses."
+            "Trade action suppressed because the position's unrealized PnL is "
+            "unknown — the deterministic exit rubric needs a known PnL to decide "
+            "between profit-taking and loss-cutting."
+        )
+    elif not is_profitable and not is_losing:
+        reason = (
+            "Trade action suppressed because the position's PnL "
+            f"({pnl:.2%}) sits within the cushion between the loss-cut threshold "
+            f"(-{min_exit_loss_pct:.2%}) and the minimum exit profit margin "
+            f"({min_exit_profit_pct:.2%}) — too small a move for the deterministic "
+            "rubric to act on in either direction."
         )
     elif len(confirmations) < 2:
         reason = (
@@ -120,8 +145,8 @@ def validate_signal_semantics(
             "key_indicators": list(confirmations),
             "invalidation_condition": (
                 "At least two bearish confirmations spanning two different categories "
-                "(trend, momentum, price action) while the position is open and "
-                "profitable."
+                "(trend, momentum, price action) while the position is open and either "
+                "profitable beyond the margin or losing beyond the loss-cut threshold."
             ),
         }
     )

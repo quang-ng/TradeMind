@@ -27,12 +27,19 @@ class LLMServiceSettings(BaseSettings):
     # RSI/EMA/MACD values and copied prompt phrases into false BUY signals.
     ollama_model: str = "qwen2.5:7b"
     ollama_temperature: float = 0.4
-    # The exit rubric (semantic_validator.py) only locks in gains, never cuts
-    # losses — but "profitable" must mean more than literally > 0. Analyze
-    # latency plus forceexit execution slippage can turn a marginally
-    # positive unrealized_pnl_pct at decision time into a net loss by fill
-    # time once round-trip fees are counted. Require a cushion above that.
+    # The exit rubric (validators/semantic.py) locks in gains once
+    # unrealized_pnl_pct clears this margin — a bare > 0 isn't enough, since
+    # analyze latency plus forceexit execution slippage can turn a marginally
+    # positive reading at decision time into a net loss by fill time once
+    # round-trip fees are counted. Require a cushion above that.
     min_exit_profit_pct: float = 0.005
+    # Symmetric loss-cutting threshold: the exit rubric cuts a losing
+    # position once unrealized_pnl_pct falls below -min_exit_loss_pct and the
+    # same cross-category bearish confirmation bar is met, so a confirmed
+    # trend reversal is cut before riding down to the wider ATR/static
+    # stop-loss (PROJECT.md Section 9.2). Kept small but non-zero so it
+    # doesn't fire on ordinary noise.
+    min_exit_loss_pct: float = 0.005
     # The bounded timeout remains a fail-closed backstop for unusually slow
     # local inference; the Scheduler staggers normal requests within each
     # thirty-minute candle period, which leaves plenty of room above 180s

@@ -1,4 +1,7 @@
-from freqtrade.strategy import IStrategy
+from datetime import datetime
+
+from freqtrade.persistence import Trade
+from freqtrade.strategy import IStrategy, stoploss_from_absolute
 from pandas import DataFrame
 
 
@@ -7,15 +10,17 @@ class ExternalSignalStrategy(IStrategy):
     autonomous entry or exit logic. Entries occur only via authenticated
     `forceenter` calls from `risk_engine`; SELL signals that resolve to an
     exit also come from `risk_engine`, via `forceexit`. This class exists
-    to satisfy Freqtrade's `IStrategy` contract and to provide the static
-    safety net described in PROJECT.md Section 9.2.
+    to satisfy Freqtrade's `IStrategy` contract and to provide the safety
+    nets described in PROJECT.md Section 9.2.
 
-    `stoploss` is intentionally the conservative upper bound
-    (`RiskConfig.max_stop_loss_pct`), not the tighter, per-trade ATR-based
-    `stop_loss_price` the Risk Engine computes (PROJECT.md Section 9.2) —
-    Freqtrade's `forceenter` API has no field for a per-trade custom stop,
-    only this strategy-wide static value. The computed value is still
-    persisted to `RiskDecision.stop_loss_price` for audit.
+    `stoploss` is the conservative strategy-wide upper bound
+    (`RiskConfig.max_stop_loss_pct`) and stays the fallback. The tighter,
+    per-trade ATR-based `stop_loss_price` the Risk Engine computes
+    (PROJECT.md Section 9.2) is passed at entry via `forceenter`'s
+    `entry_tag` (`sl:<price>`, see `risk_engine/app/main.py`) and applied
+    per-trade by `custom_stoploss()` below, which falls back to the static
+    `stoploss` if the tag is missing or malformed — it must never fail
+    open to "no stop."
     """
 
     INTERFACE_VERSION = 3
@@ -36,8 +41,11 @@ class ExternalSignalStrategy(IStrategy):
         "720": 0.015,
         "1440": 0.01,
     }
-    # Conservative static floor — see class docstring.
+    # Conservative static floor — see class docstring. Also the fallback
+    # used by custom_stoploss() below whenever the per-trade tag is absent
+    # or unparseable.
     stoploss = -0.08
+    use_custom_stoploss = True
 
     process_only_new_candles = True
     use_exit_signal = False
@@ -53,3 +61,27 @@ class ExternalSignalStrategy(IStrategy):
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         dataframe["exit_long"] = 0
         return dataframe
+
+    def custom_stoploss(
+        self,
+        pair: str,
+        trade: Trade,
+        current_time: datetime,
+        current_rate: float,
+        current_profit: float,
+        after_fill: bool,
+        **kwargs,
+    ) -> float | None:
+        """Apply the Risk Engine's per-trade ATR stop, carried in via
+        `forceenter`'s `entry_tag` as `sl:<absolute price>`
+        (`risk_engine/app/main.py::_submit_entry_order`). Any missing or
+        malformed tag falls back to the static `stoploss` — never fail
+        open to no stop at all."""
+        tag = trade.enter_tag or ""
+        if not tag.startswith("sl:"):
+            return self.stoploss
+        try:
+            stop_rate = float(tag[len("sl:") :])
+        except ValueError:
+            return self.stoploss
+        return stoploss_from_absolute(stop_rate=stop_rate, current_rate=current_rate)

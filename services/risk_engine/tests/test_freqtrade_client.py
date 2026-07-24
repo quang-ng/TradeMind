@@ -29,6 +29,34 @@ async def test_forceenter_posts_pair_side_and_stake_amount():
     assert b'"stakeamount":250.0' in captured["body"]
 
 
+async def test_forceenter_includes_entrytag_when_provided():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(200, json={"status": "Force entry accepted"})
+
+    client = _client_with_handler(handler)
+    await client.forceenter(
+        pair="BTC/USDT", stake_amount=Decimal("250.00"), entry_tag="sl:59000"
+    )
+
+    assert b'"entrytag":"sl:59000"' in captured["body"]
+
+
+async def test_forceenter_omits_entrytag_when_not_provided():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(200, json={"status": "Force entry accepted"})
+
+    client = _client_with_handler(handler)
+    await client.forceenter(pair="BTC/USDT", stake_amount=Decimal("250.00"))
+
+    assert b"entrytag" not in captured["body"]
+
+
 async def test_forceexit_posts_trade_id():
     captured = {}
 

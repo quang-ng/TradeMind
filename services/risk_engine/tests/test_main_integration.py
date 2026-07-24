@@ -154,7 +154,10 @@ async def _seed_open_position(session_factory, *, symbol: str, freqtrade_trade_i
 async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_session_factory):
     signal_id = await _seed_signal(db_session_factory, symbol="BTC/USDT", action=Action.BUY)
 
+    captured = {}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
         return httpx.Response(200, json={"trade_id": 99, "status": "ok"})
 
     async with db_session_factory() as session:
@@ -178,6 +181,8 @@ async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_se
         assert order.status == OrderStatus.SUBMITTED.value
         assert order.freqtrade_trade_id == 99
         assert order.side == "BUY"
+        assert decision.stop_loss_price is not None
+        assert b'"entrytag":"sl:' in captured["body"]
 
 
 async def test_entry_signal_approved_but_freqtrade_unreachable_marks_order_failed(

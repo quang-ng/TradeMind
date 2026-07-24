@@ -145,7 +145,7 @@ async def _handle_entry_signal(
         assert result.position_size_usdt is not None and result.position_size_base is not None
         await _submit_entry_order(
             session, freqtrade_client, config, signal_row, decision.id, result.position_size_usdt,
-            result.position_size_base,
+            result.position_size_base, result.stop_loss_price,
         )
 
     await session.commit()
@@ -244,13 +244,15 @@ async def _submit_entry_order(
     risk_decision_id: uuid.UUID,
     position_size_usdt: Decimal,
     position_size_base: Decimal,
+    stop_loss_price: Decimal | None,
 ) -> None:
     """PROJECT.md Section 5.1 step 8-9. Freqtrade unreachable -> `Order`
     persisted as `FAILED` (Section 9.4), never blocks the already-persisted
     `RiskDecision(approved=true)`."""
+    entry_tag = f"sl:{stop_loss_price}" if stop_loss_price is not None else None
     try:
         response = await freqtrade_client.forceenter(
-            pair=signal_row.symbol, stake_amount=position_size_usdt
+            pair=signal_row.symbol, stake_amount=position_size_usdt, entry_tag=entry_tag
         )
         freqtrade_trade_id = response.get("trade_id") or response.get("id")
         status = OrderStatus.SUBMITTED

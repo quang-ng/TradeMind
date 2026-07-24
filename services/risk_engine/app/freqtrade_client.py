@@ -18,11 +18,11 @@ class FreqtradeClient:
     """Thin wrapper around Freqtrade's REST API (PROJECT.md Section 14 rule
     8: this is the only code path that may call `forceenter`/`forceexit`).
 
-    Freqtrade's `forceenter` has no field for a per-trade custom stop-loss
-    — only the strategy's static `stoploss` (see
-    `freqtrade/user_data/strategies/ExternalSignalStrategy.py`). The
-    Risk Engine's computed `stop_loss_price` (Section 9.2) is still
-    persisted to `RiskDecision` for audit; it is not passed here.
+    The Risk Engine's computed per-trade `stop_loss_price` (Section 9.2) is
+    passed through `forceenter`'s `entry_tag` field and read back by
+    `ExternalSignalStrategy.custom_stoploss()` (see
+    `freqtrade/user_data/strategies/ExternalSignalStrategy.py`), since
+    Freqtrade has no dedicated per-trade stop-loss field on `forceenter`.
     """
 
     def __init__(self, settings: FreqtradeSettings | None = None, http_client: Any = None) -> None:
@@ -36,12 +36,18 @@ class FreqtradeClient:
             timeout=self._settings.freqtrade_request_timeout_seconds,
         )
 
-    async def forceenter(self, *, pair: str, stake_amount: Decimal) -> dict:
+    async def forceenter(
+        self, *, pair: str, stake_amount: Decimal, entry_tag: str | None = None
+    ) -> dict:
         """PROJECT.md Section 5.1 step 8."""
-        return await self._post(
-            "/api/v1/forceenter",
-            {"pair": pair, "side": "long", "stakeamount": float(stake_amount)},
-        )
+        payload: dict[str, Any] = {
+            "pair": pair,
+            "side": "long",
+            "stakeamount": float(stake_amount),
+        }
+        if entry_tag is not None:
+            payload["entrytag"] = entry_tag
+        return await self._post("/api/v1/forceenter", payload)
 
     async def forceexit(self, *, trade_id: int) -> dict:
         """PROJECT.md Section 5.1 (exit path, Phase 3)."""
