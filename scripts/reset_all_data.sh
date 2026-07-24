@@ -52,6 +52,9 @@ echo "Backing up Postgres to ${backup_file}..."
 "${compose[@]}" exec -T postgres pg_dump -U trademind -Fc trademind > "${backup_file}"
 echo "Backup saved ($(du -h "${backup_file}" | cut -f1))."
 
+echo "Building images..."
+"${compose[@]}" build
+
 echo "Stopping the stack..."
 "${compose[@]}" down
 
@@ -64,8 +67,18 @@ for volume in "${data_volumes[@]}"; do
     fi
 done
 
-echo "Rebuilding and starting from a clean slate..."
-"${compose[@]}" up -d --build --wait --wait-timeout 300
+# A freshly-created named volume is mounted root:root by default. Freqtrade's
+# container always runs as the non-root `ftuser` (freqtrade/Dockerfile pins
+# USER ftuser, no runtime privilege drop to fix ownership itself), so without
+# this step the very first boot after a reset fails with sqlite3
+# "unable to open database file" and crash-loops on the healthcheck.
+echo "Pre-creating trademind_freqtrade_data with ftuser ownership..."
+docker volume create trademind_freqtrade_data >/dev/null
+docker run --rm -u root -v trademind_freqtrade_data:/freqtrade/db trademind-freqtrade \
+    chown -R ftuser:ftuser /freqtrade/db
+
+echo "Starting from a clean slate..."
+"${compose[@]}" up -d --wait --wait-timeout 300
 
 echo
 echo "Reset complete. Current state:"
