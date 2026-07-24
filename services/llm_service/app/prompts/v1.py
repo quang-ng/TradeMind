@@ -1,4 +1,4 @@
-from ..schemas import AnalyzeRequest
+from ..models.wire import AnalyzeRequest
 
 SYSTEM_PROMPT_V1 = """You are a market analysis assistant. You have NO authority to execute trades,
 size positions, or access any account. You only classify the provided market

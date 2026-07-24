@@ -39,6 +39,18 @@ class LLMServiceSettings(BaseSettings):
     # for a CPU-bound model (e.g. llama3.2:3b) without risking overlap into
     # the next candle's cycle.
     analyze_timeout_seconds: float = 300.0
+    # ResponseValidator's repair-prompt retry (llm_service/app/validators/
+    # response_validator.py). 0 reproduces PROJECT.md Section 8.3's
+    # documented "no retry" behavior for a malformed/schema-invalid response
+    # exactly. Raise this only after updating Section 8.3's failure-mode
+    # table to describe the repair-prompt retry it would activate.
+    max_repair_attempts: int = 0
+    # PromptBuilder's optional strategy-regime framing line (llm_service/app/
+    # prompts/builder.py). Off by default so the exact text sent to the LLM
+    # (and therefore its decisions) is unchanged from before this refactor;
+    # the Strategy Selector still runs and its result is still attached to
+    # Signal.raw_response either way.
+    include_strategy_context_in_prompt: bool = False
 
 
 class RedisSettings(BaseSettings):

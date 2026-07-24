@@ -1,8 +1,13 @@
+"""The `/analyze` HTTP contract (PROJECT.md Section 8). Every field name and
+shape here is load-bearing for the Scheduler, so nothing in this module may
+change without a matching PROJECT.md update — that is the one rule the rest
+of this package's internal reorganization does not get to break."""
+
 from typing import Annotated, Literal
 
 from common.enums import Action, SignalStatus
 from common.sentiment import MarketSentiment
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, StringConstraints
 
 # "BASE/QUOTE" shape only (e.g. "BTC/USDT") — deliberately not a fixed
 # Literal enum of specific coins. The active symbol set lives in one place,
@@ -68,20 +73,18 @@ class AnalyzeRequest(BaseModel):
     provider_override: ProviderOverride | None = None
 
 
-class LLMOutput(BaseModel):
-    """Raw model contract, Section 8.2 of PROJECT.md."""
+class TradingSignal(BaseModel):
+    """Validated result of one `/analyze` call — the HTTP response model.
 
-    action: Action
-    confidence: float = Field(ge=0.0, le=1.0)
-    reasoning: str = Field(min_length=1, max_length=500)
-    key_indicators: list[str] = Field(default_factory=list)
-    invalidation_condition: str = Field(min_length=1)
-
-
-class Signal(BaseModel):
-    """Validated result of one /analyze call. Mirrors the Section 7.1 Signal
-    fields that are determinable without persistence (id/trace_id are minted
-    by the Scheduler + Postgres in a later phase)."""
+    Named `TradingSignal` (not `Signal`) to distinguish it, inside this
+    codebase, from `common.db.models.Signal`, the SQLAlchemy row the
+    Scheduler persists from this response. The two have historically shared
+    a name; this one is the wire representation, minted fresh per request,
+    with no `id`/`trace_id` (those are minted by the Scheduler + Postgres
+    downstream). Field names and shapes mirror PROJECT.md Section 7.1
+    exactly — renaming the Python class does not change the JSON produced,
+    which is what the Scheduler actually depends on.
+    """
 
     symbol: str
     timeframe: str

@@ -1,16 +1,19 @@
-import asyncio
 import logging
 
 from common.config import LLMServiceSettings
 from common.logging import configure_json_logging
 from fastapi import Depends, FastAPI
 
-from .prompts.v1 import SYSTEM_PROMPT_V1, build_user_prompt
-from .providers import get_provider
-from .providers.base import Provider
-from .schemas import AnalyzeRequest, ProviderOverride, Signal
-from .semantic_validator import validate_signal_semantics
-from .validators import ValidationFailure, build_hold_signal, build_signal, parse_llm_response
+from .context.builder import ContextBuilder
+from .llm.client import LLMClient
+from .llm.providers import get_provider
+from .llm.providers.base import Provider
+from .models.wire import AnalyzeRequest, ProviderOverride, TradingSignal
+from .prompts.builder import PromptBuilder
+from .services.pipeline import AnalysisPipeline
+from .signals.generator import SignalGenerator
+from .strategies.selector import StrategySelector
+from .validators.response_validator import ResponseValidator
 
 configure_json_logging()
 logger = logging.getLogger(__name__)
@@ -38,79 +41,33 @@ def _apply_override(
     return settings.model_copy(update=updates) if updates else settings
 
 
-@app.post("/analyze", response_model=Signal)
+def _build_pipeline(provider: Provider, settings: LLMServiceSettings) -> AnalysisPipeline:
+    """Composition root: wires one `AnalysisPipeline` per request from the
+    resolved `Provider` + settings. Rebuilt per call (rather than cached as
+    a FastAPI dependency) because `provider` may be the DI-injected default
+    or a request-scoped `provider_override` swap-in — see `analyze()`."""
+    return AnalysisPipeline(
+        context_builder=ContextBuilder(),
+        strategy_selector=StrategySelector(),
+        prompt_builder=PromptBuilder(
+            include_strategy_context=settings.include_strategy_context_in_prompt
+        ),
+        llm_client=LLMClient(provider, timeout_seconds=settings.analyze_timeout_seconds),
+        response_validator=ResponseValidator(
+            min_exit_profit_pct=settings.min_exit_profit_pct,
+            max_repair_attempts=settings.max_repair_attempts,
+        ),
+        signal_generator=SignalGenerator(),
+    )
+
+
+@app.post("/analyze", response_model=TradingSignal)
 async def analyze(
     request: AnalyzeRequest,
     provider: Provider = Depends(get_provider_dependency),
     settings: LLMServiceSettings = Depends(get_settings),
-) -> Signal:
+) -> TradingSignal:
     if request.provider_override is not None:
         provider = get_provider(_apply_override(settings, request.provider_override))
-    model_name = f"{provider.provider_name}:{provider.model}"
-    raw_text, failure_reason = await _call_provider_with_retry(
-        provider, request, settings.analyze_timeout_seconds
-    )
-
-    if failure_reason is not None:
-        logger.warning(
-            "llm_call_failed", extra={"reason": failure_reason, "symbol": request.symbol}
-        )
-        return build_hold_signal(request, reason=failure_reason, model_name=model_name)
-
-    try:
-        output = parse_llm_response(raw_text)
-    except ValidationFailure as exc:
-        logger.warning(
-            "llm_response_invalid", extra={"reason": exc.reason, "symbol": request.symbol}
-        )
-        return build_hold_signal(
-            request, reason=exc.reason, model_name=model_name, raw_response={"raw": raw_text}
-        )
-
-    semantic_result = validate_signal_semantics(
-        request, output, min_exit_profit_pct=settings.min_exit_profit_pct
-    )
-    raw_response = {
-        "raw": raw_text,
-        "model_action": output.action.value,
-        "semantic_action": semantic_result.output.action.value,
-        "exit_confirmations": list(semantic_result.exit_confirmations),
-    }
-    if semantic_result.action_changed:
-        logger.info(
-            "llm_action_semantically_normalized",
-            extra={
-                "symbol": request.symbol,
-                "model_action": output.action.value,
-                "semantic_action": semantic_result.output.action.value,
-                "exit_confirmations": list(semantic_result.exit_confirmations),
-            },
-        )
-    return build_signal(
-        request, semantic_result.output, model_name=model_name, raw_response=raw_response
-    )
-
-
-async def _call_provider_with_retry(
-    provider: Provider, request: AnalyzeRequest, timeout_seconds: float
-) -> tuple[str | None, str | None]:
-    """Section 8.3 failure-mode table: one retry with backoff on a transport
-    failure, whole call (including the retry) bounded by `timeout_seconds`;
-    a successful-but-malformed response is not retried here — that is
-    validators.py's job, with no retry (Section 8.3: "no retry — treat as a
-    prompt/model problem, not a transient one")."""
-    system_prompt = SYSTEM_PROMPT_V1
-    user_prompt = build_user_prompt(request)
-
-    try:
-        async with asyncio.timeout(timeout_seconds):
-            try:
-                return await provider.generate(system_prompt, user_prompt), None
-            except Exception:
-                await asyncio.sleep(1.0)
-                try:
-                    return await provider.generate(system_prompt, user_prompt), None
-                except Exception:
-                    return None, "provider_error"
-    except TimeoutError:
-        return None, "llm_timeout"
+    pipeline = _build_pipeline(provider, settings)
+    return await pipeline.run(request)

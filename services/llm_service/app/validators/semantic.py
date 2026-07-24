@@ -2,7 +2,8 @@ from dataclasses import dataclass
 
 from common.enums import Action
 
-from .schemas import AnalyzeRequest, LLMOutput
+from ..models.llm import LLMOutput
+from ..models.market import MarketContext
 
 
 @dataclass(frozen=True)
@@ -13,17 +14,18 @@ class SemanticValidationResult:
 
 
 def validate_signal_semantics(
-    request: AnalyzeRequest, output: LLMOutput, *, min_exit_profit_pct: float = 0.005
+    context: MarketContext, output: LLMOutput, *, min_exit_profit_pct: float = 0.005
 ) -> SemanticValidationResult:
-    """Enforce the position-aware exit rubric after schema validation.
+    """Enforce the position-aware exit rubric after structural validation.
 
     The local model remains responsible for producing a valid response, so a
     provider failure still fails closed to HOLD before this function runs.
-    Once a response exists, however, the documented bearish confirmations are
+    Once a response exists, however, the documented bearish confirmations
+    (`context.exit_confirmations`, computed once by `ContextBuilder`) are
     deterministic facts. Enforcing them here prevents a small model from
-    returning HOLD while its own supplied evidence satisfies the SELL rubric,
-    or from proposing an action that is impossible in the current position
-    state.
+    returning HOLD while its own supplied evidence satisfies the SELL
+    rubric, or from proposing an action that is impossible in the current
+    position state.
 
     The rubric only ever forces a profit-taking exit, never a loss-cutting
     one: `unrealized_pnl_pct` must clear `min_exit_profit_pct`, or the
@@ -41,12 +43,13 @@ def validate_signal_semantics(
     same-category pair is materially weaker evidence than a cross-category
     one.
     """
-    has_open_position = request.position_context.has_open_position
+    position = context.position
+    has_open_position = position.has_open_position
     is_profitable = (
-        request.position_context.unrealized_pnl_pct is not None
-        and request.position_context.unrealized_pnl_pct > min_exit_profit_pct
+        position.unrealized_pnl_pct is not None
+        and position.unrealized_pnl_pct > min_exit_profit_pct
     )
-    confirmations = _bearish_exit_confirmations(request) if has_open_position else ()
+    confirmations = context.exit_confirmations if has_open_position else ()
     confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
     rubric_satisfied = (
         has_open_position
@@ -63,7 +66,7 @@ def validate_signal_semantics(
                 "reasoning": (
                     f"Deterministic exit rubric found {len(confirmations)} independent "
                     f"bearish confirmations while the position was profitable "
-                    f"({request.position_context.unrealized_pnl_pct:.2%}): "
+                    f"({position.unrealized_pnl_pct:.2%}): "
                     f"{', '.join(confirmations)}."
                 ),
                 "key_indicators": list(confirmations),
@@ -129,9 +132,9 @@ def validate_signal_semantics(
     )
 
 
-# Groups mirror the prompt's own framing (v1.py rule 3): trend and momentum
-# confirmations each move in highly-correlated pairs, so requiring two
-# categories (not just two confirmations) demands genuinely independent
+# Groups mirror the prompt's own framing (prompts/v1.py rule 3): trend and
+# momentum confirmations each move in highly-correlated pairs, so requiring
+# two categories (not just two confirmations) demands genuinely independent
 # evidence rather than one relationship flipping twice.
 _CONFIRMATION_CATEGORIES = {
     "price_below_ema50_and_ema200": "trend",
@@ -141,39 +144,3 @@ _CONFIRMATION_CATEGORIES = {
     "lower_highs_and_lows": "price_action",
     "falling_price_on_high_volume": "price_action",
 }
-
-
-def _bearish_exit_confirmations(request: AnalyzeRequest) -> tuple[str, ...]:
-    candles = request.ohlcv
-    if not candles:
-        return ()
-
-    latest = candles[-1]
-    indicators = request.indicators
-    confirmations: list[str] = []
-
-    if latest.c < indicators.ema_50 and latest.c < indicators.ema_200:
-        confirmations.append("price_below_ema50_and_ema200")
-    if indicators.ema_50 < indicators.ema_200:
-        confirmations.append("ema50_below_ema200")
-    if (
-        indicators.macd.histogram < 0
-        and indicators.macd.macd < indicators.macd.signal
-    ):
-        confirmations.append("bearish_macd")
-    if indicators.rsi_14 < 45:
-        confirmations.append("rsi_below_45")
-    if len(candles) >= 3:
-        recent = candles[-3:]
-        lower_highs = all(left.h > right.h for left, right in zip(recent, recent[1:]))
-        lower_lows = all(left.l > right.l for left, right in zip(recent, recent[1:]))
-        if lower_highs and lower_lows:
-            confirmations.append("lower_highs_and_lows")
-    if (
-        len(candles) >= 2
-        and latest.c < candles[-2].c
-        and latest.v > indicators.volume_sma_20
-    ):
-        confirmations.append("falling_price_on_high_volume")
-
-    return tuple(confirmations)

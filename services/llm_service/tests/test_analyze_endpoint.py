@@ -5,8 +5,8 @@ import pytest
 from common.config import LLMServiceSettings
 from fastapi.testclient import TestClient
 from llm_service.app import main as main_module
+from llm_service.app.llm.providers.base import Provider
 from llm_service.app.main import app, get_provider_dependency, get_settings
-from llm_service.app.providers.base import Provider
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
