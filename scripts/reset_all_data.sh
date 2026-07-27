@@ -74,11 +74,13 @@ done
 # "unable to open database file" and crash-loops on the healthcheck.
 echo "Pre-creating trademind_freqtrade_data with ftuser ownership..."
 docker volume create trademind_freqtrade_data >/dev/null
-# --entrypoint is required: the image's ENTRYPOINT is /entrypoint.sh, so
-# without this override "chown ..." would be passed to it as arguments
-# (which it ignores) instead of replacing it.
-docker run --rm -u root --entrypoint chown -v trademind_freqtrade_data:/freqtrade/db \
-    trademind-freqtrade -R ftuser:ftuser /freqtrade/db
+# Use the Compose service so the command always uses the deployment's actual
+# Freqtrade image, project name, and volume mapping. --entrypoint is required
+# because the image's normal entrypoint would otherwise consume the command.
+"${compose[@]}" run --rm --no-deps \
+    --user root \
+    --entrypoint chown \
+    freqtrade -R ftuser:ftuser /freqtrade/db
 
 echo "Starting from a clean slate..."
 "${compose[@]}" up -d --wait --wait-timeout 300
