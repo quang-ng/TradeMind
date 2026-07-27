@@ -3,8 +3,8 @@
 # postgres/redis/freqtrade data volumes, then brings everything back up
 # from a clean slate. `migrate` re-runs `alembic upgrade head` on the fresh
 # Postgres volume (recreating the schema and seeding `system_state`),
-# Freqtrade recreates an empty tradesv3.dryrun.sqlite, and Redis starts
-# empty — no manual TRUNCATE/psql/redis-cli steps needed.
+# Freqtrade recreates an empty mode-specific SQLite ledger, and Redis
+# starts empty — no manual TRUNCATE/psql/redis-cli steps needed.
 #
 # Deletes: all signals/risk_decisions/orders/positions/audit_events,
 # Freqtrade's dry-run trade ledger, all Redis state (idempotency keys,

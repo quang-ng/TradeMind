@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+. /select-db-url.sh
+
 python3 - <<'PYEOF'
 import json
 import os

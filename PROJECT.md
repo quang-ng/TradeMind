@@ -340,6 +340,7 @@ trademind/
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | freqtrade, risk_engine only | Never injected into llm_service, admin_api, or notifier |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine only | Authenticated balance reads and approved force-entry/exit calls; never injected into admin_api |
 | `BALANCE_REFRESH_INTERVAL_SECONDS` | risk_engine | Refresh cadence for the short-lived Admin balance snapshot (default 30s; risk evaluation always performs its own fresh call) |
+| `SIGNAL_MAX_AGE_MINUTES` | risk_engine | Maximum age of a signal measured from candle close (default 65 minutes for the staggered 1-hour cycle) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | notifier | Outbound notifications |
 | `ADMIN_API_KEY` | admin_api | Auth for the admin API |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine | Internal-network-only Freqtrade REST credentials |
@@ -350,7 +351,7 @@ trademind/
 
 ## 7. Domain Models
 
-Persisted entities live in PostgreSQL and are the audit system of record. Freqtrade retains its own internal trade database in a persistent SQLite volume purely for its own execution bookkeeping — TradeMind does not treat it as authoritative and mirrors the state it cares about into `orders`/`positions` via the webhook, so the audit trail is stable even if Freqtrade's internal schema changes across versions. Persisting SQLite prevents Freqtrade trade IDs from being reused after routine container recreation; webhook, reconciliation, and exit-order matching still validate both the trade ID and symbol.
+Persisted entities live in PostgreSQL and are the audit system of record. Freqtrade retains its own internal trade database in a persistent SQLite volume purely for its own execution bookkeeping — `tradesv3.dryrun.sqlite` for simulation and `tradesv3.sqlite` for live execution. TradeMind does not treat it as authoritative and mirrors the state it cares about into `orders`/`positions` via the webhook, so the audit trail is stable even if Freqtrade's internal schema changes across versions. Persisting SQLite prevents Freqtrade trade IDs from being reused after routine container recreation; webhook, reconciliation, and exit-order matching still validate both the trade ID and symbol.
 
 Every row created during a single trading-cycle run shares a `trace_id` (UUID, minted by the Scheduler at cycle start), enabling a single query to reconstruct the full decision path from signal to (eventual) position close.
 
@@ -687,7 +688,7 @@ non-negative USDT stake row. There is no configured-equity fallback.
   "consecutive_loss_limit": 3,
   "cooldown_minutes": 120,
   "min_confidence": 0.70,
-  "signal_max_age_minutes": 25,
+  "signal_max_age_minutes": 65,
   "atr_stop_multiplier": 2.0,
   "min_stop_loss_pct": 0.015,
   "max_stop_loss_pct": 0.08,
@@ -700,7 +701,7 @@ non-negative USDT stake row. There is no configured-equity fallback.
 | 1 | Kill switch | `killswitch_enabled` | **First gate, always checked first.** Reject everything with `KILLSWITCH_ACTIVE` |
 | 2 | Duplicate signal | Redis `idempotency:decision:{signal_id}` | Reject silently (log only, no duplicate notification) with `DUPLICATE_SIGNAL` |
 | 3 | Signal action | `action != HOLD` | `action = HOLD` is never "rejected" — it's recorded as `approved=false, reason=SIGNAL_WAS_HOLD` and generates no order |
-| 4 | Signal staleness | `signal_max_age_minutes = 25` | If `now - candle_close_time` (plus processing delay) exceeds this, reject with `STALE_SIGNAL`; 25 minutes covers the configured 16-symbol CPU inference stagger while remaining below one 30-minute candle |
+| 4 | Signal staleness | `signal_max_age_minutes = 65` | If `now - candle_close_time` (plus processing delay) exceeds this, reject with `STALE_SIGNAL`; 65 minutes covers the configured 16-symbol stagger across one 1-hour cycle plus bounded processing delay |
 | 5 | Minimum confidence | `min_confidence = 0.70` | Reject with `LOW_CONFIDENCE` |
 | 6 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
 | 7 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
