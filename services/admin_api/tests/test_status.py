@@ -2,8 +2,40 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import pytest
+from admin_api.app.deps import get_redis_client
+from admin_api.app.main import app
+from common import redis_keys
+from common.account_balance import AccountBalanceSnapshot
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        snapshot = AccountBalanceSnapshot(
+            equity_usdt=Decimal("115"),
+            free_balance_usdt=Decimal("100"),
+            captured_at=datetime.now(timezone.utc),
+        )
+        self.values = {
+            redis_keys.ACCOUNT_BALANCE_SNAPSHOT_KEY: snapshot.model_dump_json()
+        }
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+
+@pytest.fixture(autouse=True)
+def balance_redis() -> FakeRedis:
+    fake = FakeRedis()
+
+    async def override_get_redis_client():
+        yield fake
+
+    app.dependency_overrides[get_redis_client] = override_get_redis_client
+    yield fake
+    app.dependency_overrides.pop(get_redis_client, None)
 
 
 async def test_status_requires_auth(client):
@@ -18,8 +50,21 @@ async def test_status_defaults_with_empty_db(client, auth_headers):
     assert body["killswitch_enabled"] is False
     assert body["dry_run"] is True
     assert body["open_positions"] == 0
+    assert body["equity_usdt"] == "115"
+    assert body["free_balance_usdt"] == "100"
     assert body["pairs"]["BTC/USDT"]["last_cycle_at"] is None
     assert body["pairs"]["ETH/USDT"]["last_action"] is None
+
+
+async def test_status_fails_when_live_balance_is_unavailable(
+    client, auth_headers, balance_redis
+):
+    balance_redis.values.clear()
+
+    response = await client.get("/status", headers=auth_headers)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "account balance unavailable"
 
 
 async def test_status_reflects_open_position_and_latest_signal(

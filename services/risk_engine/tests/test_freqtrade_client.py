@@ -95,6 +95,79 @@ async def test_get_trade_returns_typed_trade_state():
     assert trade.amount == Decimal("0.01")
 
 
+async def test_get_account_balance_returns_live_equity_and_free_usdt():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/api/v1/balance")
+        return httpx.Response(
+            200,
+            json={
+                "currencies": [
+                    {
+                        "currency": "USDT",
+                        "free": 87.25,
+                        "balance": 100,
+                        "used": 12.75,
+                        "stake": "USDT",
+                    },
+                    {
+                        "currency": "BTC",
+                        "free": 0.0002,
+                        "balance": 0.0002,
+                        "used": 0,
+                        "stake": "USDT",
+                    },
+                ],
+                "total": 115.40,
+                "stake": "USDT",
+            },
+        )
+
+    balance = await _client_with_handler(handler).get_account_balance()
+
+    assert balance.equity_usdt == Decimal("115.4")
+    assert balance.free_balance_usdt == Decimal("87.25")
+    assert balance.source == "freqtrade"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"currencies": [], "total": 115, "stake": "USDT"},
+        {
+            "currencies": [
+                {
+                    "currency": "USDT",
+                    "free": -1,
+                    "balance": 100,
+                    "used": 0,
+                    "stake": "USDT",
+                }
+            ],
+            "total": 100,
+            "stake": "USDT",
+        },
+        {
+            "currencies": [
+                {
+                    "currency": "EUR",
+                    "free": 100,
+                    "balance": 100,
+                    "used": 0,
+                    "stake": "EUR",
+                }
+            ],
+            "total": 100,
+            "stake": "EUR",
+        },
+    ],
+)
+async def test_get_account_balance_rejects_unsafe_payloads(payload):
+    client = _client_with_handler(lambda request: httpx.Response(200, json=payload))
+
+    with pytest.raises(FreqtradeUnavailable, match="invalid balance response"):
+        await client.get_account_balance()
+
+
 async def test_raises_freqtrade_unavailable_on_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="service unavailable")

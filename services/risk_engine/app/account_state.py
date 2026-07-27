@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from common.account_balance import AccountBalanceSnapshot
 from common.db.models import Position
 from common.enums import PositionStatus
 from sqlalchemy import select
@@ -10,15 +11,13 @@ from .schemas import AccountState
 
 
 async def load_account_state(
-    session: AsyncSession, *, starting_equity_usdt: Decimal
+    session: AsyncSession, *, balance: AccountBalanceSnapshot
 ) -> AccountState:
     """Builds the Section 9.1/9.2 account-state inputs from Postgres.
 
-    `equity_usdt` has no live source until Phase 3 wires a Freqtrade
-    balance query (Freqtrade owns balance/equity per PROJECT.md Section 4);
-    `starting_equity_usdt` is a configured placeholder so the rule set and
-    sizing formula are fully exercisable before that exists. Swapping in a
-    live balance later only changes this one lookup, not its callers.
+    Equity and free stake balance come exclusively from Freqtrade's
+    authenticated `/balance` endpoint. Callers must obtain a fresh typed
+    snapshot for this decision; no configured or cached fallback is accepted.
     """
     open_positions = (
         (
@@ -64,7 +63,7 @@ async def load_account_state(
         else:
             break
 
-    equity_usdt = starting_equity_usdt
+    equity_usdt = balance.equity_usdt
     today = datetime.now(timezone.utc).date()
     daily_pnl_usdt = sum(
         (
@@ -75,11 +74,10 @@ async def load_account_state(
         start=Decimal("0"),
     )
     daily_pnl_pct = (daily_pnl_usdt / equity_usdt) if equity_usdt > 0 else Decimal("0")
-    free_balance_usdt = max(equity_usdt - total_exposure_usdt, Decimal("0"))
 
     return AccountState(
         equity_usdt=equity_usdt,
-        free_balance_usdt=free_balance_usdt,
+        free_balance_usdt=balance.free_balance_usdt,
         open_position_symbols=open_position_symbols,
         total_exposure_usdt=total_exposure_usdt,
         daily_pnl_pct=daily_pnl_pct,

@@ -66,7 +66,7 @@ class RiskDecisionOut(BaseModel):
     position_size_usdt: Decimal | None
     position_size_base: Decimal | None
     stop_loss_price: Decimal | None
-    equity_snapshot_usdt: Decimal
+    equity_snapshot_usdt: Decimal | None
     risk_pct_applied: Decimal | None
     created_at: datetime
 
@@ -148,6 +148,7 @@ class StatusOut(BaseModel):
     dry_run: bool
     open_positions: int
     equity_usdt: Decimal
+    free_balance_usdt: Decimal
     daily_pnl_pct: Decimal
     pairs: dict[str, PairStatus]
 

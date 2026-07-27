@@ -4,9 +4,11 @@ the key schema can only drift in one place."""
 
 CYCLE_LOCK_TTL_SECONDS = 5 * 60
 DECISION_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+ACCOUNT_BALANCE_SNAPSHOT_TTL_SECONDS = 90
 SIGNALS_PENDING_STREAM = "signals:pending"
 SIGNALS_PENDING_CONSUMER_GROUP = "risk_engine"
 KILLSWITCH_GLOBAL_KEY = "killswitch:global"
+ACCOUNT_BALANCE_SNAPSHOT_KEY = "account:balance:latest"
 
 
 def cycle_lock(symbol: str) -> str:

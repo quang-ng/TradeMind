@@ -7,6 +7,7 @@ const payloads: Record<string, unknown> = {
     dry_run: true,
     open_positions: 0,
     equity_usdt: '5000',
+    free_balance_usdt: '4200',
     daily_pnl_pct: '0',
     pairs: {},
   },

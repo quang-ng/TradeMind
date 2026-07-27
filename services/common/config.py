@@ -152,16 +152,6 @@ class SchedulerSettings(BaseSettings):
     scheduler_health_port: int = 8000
 
 
-class AccountSettings(BaseSettings):
-    """Placeholder equity source until Phase 3 wires a live Freqtrade
-    balance query (PROJECT.md Section 4: Freqtrade owns balance/equity).
-    `account_state.py` isolates every caller from this being a stand-in."""
-
-    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
-
-    starting_equity_usdt: Decimal = Decimal("10000")
-
-
 class FreqtradeSettings(BaseSettings):
     """FREQTRADE_API_URL / _USER / _PASS (PROJECT.md Section 6) — internal-
     network-only Freqtrade REST credentials, consumed by risk_engine only."""
@@ -172,6 +162,7 @@ class FreqtradeSettings(BaseSettings):
     freqtrade_api_user: str = ""
     freqtrade_api_pass: str = ""
     freqtrade_request_timeout_seconds: float = 15.0
+    balance_refresh_interval_seconds: float = 30.0
     reconciliation_interval_seconds: float = 60.0
     reconciliation_order_age_minutes: int = 10
 

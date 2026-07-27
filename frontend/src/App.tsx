@@ -371,7 +371,7 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
       </section>
 
       <section className="metric-grid">
-        <MetricCard label="Portfolio equity" value={money(status.equity_usdt)} note="Configured equity snapshot" icon={<CircleDollarSign />} />
+        <MetricCard label="Portfolio equity" value={money(status.equity_usdt)} note={`${money(status.free_balance_usdt)} free USDT · live Freqtrade balance`} icon={<CircleDollarSign />} />
         <MetricCard
           label="Today’s P&L"
           value={percent(status.daily_pnl_pct)}

@@ -14,7 +14,7 @@ describe('Operator authentication', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const path = String(input)
       const data = path.endsWith('/status')
-        ? { killswitch_enabled: false, dry_run: true, open_positions: 0, equity_usdt: '5000', daily_pnl_pct: '0', pairs: {} }
+        ? { killswitch_enabled: false, dry_run: true, open_positions: 0, equity_usdt: '5000', free_balance_usdt: '4200', daily_pnl_pct: '0', pairs: {} }
         : path.endsWith('/config/llm')
           ? { llm_provider: 'anthropic', anthropic_model: 'claude-sonnet-5', ollama_model: 'llama3.2:3b', ollama_temperature: 0.4 }
           : path.endsWith('/config')

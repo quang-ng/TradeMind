@@ -75,3 +75,25 @@ class FreqtradeTrade(BaseModel):
     profit_ratio: Decimal | None = None
     open_date: datetime | None = None
     close_date: datetime | None = None
+
+
+class FreqtradeCurrencyBalance(BaseModel):
+    """Typed subset of one currency row from Freqtrade's `/balance` API."""
+
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
+    currency: str
+    free: Decimal = Field(ge=0)
+    balance: Decimal = Field(ge=0)
+    used: Decimal = Field(ge=0)
+    stake: str
+
+
+class FreqtradeBalances(BaseModel):
+    """Typed subset of Freqtrade's authenticated `/balance` response."""
+
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
+    currencies: list[FreqtradeCurrencyBalance]
+    total: Decimal = Field(ge=0)
+    stake: str

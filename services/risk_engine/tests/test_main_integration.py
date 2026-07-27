@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from common.config import AccountSettings, DatabaseSettings, RiskConfig
+from common.config import DatabaseSettings, RiskConfig
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
 from sqlalchemy import select, text
@@ -63,8 +63,28 @@ async def db_session_factory():
 
 
 def _mock_freqtrade(handler) -> FreqtradeClient:
+    def with_balance(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/balance":
+            return httpx.Response(
+                200,
+                json={
+                    "currencies": [
+                        {
+                            "currency": "USDT",
+                            "free": 9000,
+                            "balance": 10000,
+                            "used": 1000,
+                            "stake": "USDT",
+                        }
+                    ],
+                    "total": 10000,
+                    "stake": "USDT",
+                },
+            )
+        return handler(request)
+
     http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), base_url="http://freqtrade-test"
+        transport=httpx.MockTransport(with_balance), base_url="http://freqtrade-test"
     )
     return FreqtradeClient(http_client=http_client)
 
@@ -166,7 +186,6 @@ async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_se
             FakeRedis(),
             str(signal_id),
             RiskConfig(),
-            AccountSettings(),
             _mock_freqtrade(handler),
         )
 
@@ -199,7 +218,6 @@ async def test_entry_signal_approved_but_freqtrade_unreachable_marks_order_faile
             FakeRedis(),
             str(signal_id),
             RiskConfig(),
-            AccountSettings(),
             _mock_freqtrade(handler),
         )
 
@@ -237,7 +255,6 @@ async def test_sell_signal_with_open_position_submits_forceexit(db_session_facto
             FakeRedis(),
             str(signal_id),
             RiskConfig(),
-            AccountSettings(),
             _mock_freqtrade(handler),
         )
 
@@ -280,7 +297,6 @@ async def test_sell_signal_fails_closed_when_trade_id_belongs_to_another_pair(
             FakeRedis(),
             str(signal_id),
             RiskConfig(),
-            AccountSettings(),
             _mock_freqtrade(handler),
         )
 
@@ -313,7 +329,6 @@ async def test_sell_signal_with_no_open_position_is_rejected_without_calling_fre
             FakeRedis(),
             str(signal_id),
             RiskConfig(),
-            AccountSettings(),
             _mock_freqtrade(handler),
         )
 
@@ -323,6 +338,41 @@ async def test_sell_signal_with_no_open_position_is_rejected_without_calling_fre
         ).scalar_one()
         assert decision.approved is False
         assert decision.rejection_reason == "NO_POSITION_TO_EXIT"
+        orders = (
+            await session.execute(select(Order).where(Order.risk_decision_id == decision.id))
+        ).scalars().all()
+        assert orders == []
+
+
+async def test_signal_is_rejected_without_order_when_live_balance_is_unavailable(
+    db_session_factory,
+):
+    signal_id = await _seed_signal(db_session_factory, symbol="BTC/USDT", action=Action.BUY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="balance unavailable")
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://freqtrade-test"
+    )
+    client = FreqtradeClient(http_client=http_client)
+
+    async with db_session_factory() as session:
+        await process_signal(
+            session,
+            FakeRedis(),
+            str(signal_id),
+            RiskConfig(),
+            client,
+        )
+
+    async with db_session_factory() as session:
+        decision = (
+            await session.execute(select(RiskDecision).where(RiskDecision.signal_id == signal_id))
+        ).scalar_one()
+        assert decision.approved is False
+        assert decision.rejection_reason == "FREQTRADE_BALANCE_UNAVAILABLE"
+        assert decision.equity_snapshot_usdt is None
         orders = (
             await session.execute(select(Order).where(Order.risk_decision_id == decision.id))
         ).scalars().all()

@@ -1,11 +1,13 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 import httpx
+from common.account_balance import AccountBalanceSnapshot
 from common.config import FreqtradeSettings
 from pydantic import ValidationError
 
-from .schemas import FreqtradeTrade
+from .schemas import FreqtradeBalances, FreqtradeTrade
 
 
 class FreqtradeUnavailable(Exception):
@@ -60,6 +62,43 @@ class FreqtradeClient:
             return FreqtradeTrade.model_validate(payload)
         except ValidationError as exc:
             raise FreqtradeUnavailable(f"invalid trade response: {exc}") from exc
+
+    async def get_account_balance(self) -> AccountBalanceSnapshot:
+        """Return live USDT equity and immediately tradable USDT.
+
+        Freqtrade is the authoritative exchange-facing component. Any
+        transport, authentication, schema, currency, or value mismatch is
+        surfaced as `FreqtradeUnavailable`; callers must never substitute a
+        configured or previously cached balance for risk evaluation.
+        """
+        payload = await self._get("/api/v1/balance")
+        try:
+            balances = FreqtradeBalances.model_validate(payload)
+        except ValidationError as exc:
+            raise FreqtradeUnavailable(f"invalid balance response: {exc}") from exc
+
+        if balances.stake != "USDT":
+            raise FreqtradeUnavailable(
+                f"invalid balance response: expected USDT stake, got {balances.stake!r}"
+            )
+        stake_rows = [
+            row
+            for row in balances.currencies
+            if row.currency == balances.stake and row.stake == balances.stake
+        ]
+        if len(stake_rows) != 1:
+            raise FreqtradeUnavailable(
+                "invalid balance response: expected exactly one USDT currency row"
+            )
+
+        try:
+            return AccountBalanceSnapshot(
+                equity_usdt=balances.total,
+                free_balance_usdt=stake_rows[0].free,
+                captured_at=datetime.now(timezone.utc),
+            )
+        except ValidationError as exc:
+            raise FreqtradeUnavailable(f"invalid balance response: {exc}") from exc
 
     async def _post(self, path: str, payload: dict) -> dict:
         try:

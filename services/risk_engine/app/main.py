@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import redis.asyncio as redis
 from common import kill_switch, redis_keys
-from common.config import AccountSettings, FreqtradeSettings, RedisSettings, RiskConfig
+from common.config import FreqtradeSettings, RedisSettings, RiskConfig
 from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
 from common.db.session import get_session_factory
 from common.enums import (
@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .account_state import load_account_state
+from .balance_monitor import publish_balance_snapshot, run_balance_refresh_loop
 from .evaluator import RiskDecisionResult, evaluate
 from .exit_evaluator import ExitDecisionResult, evaluate_exit
 from .freqtrade_client import FreqtradeClient, FreqtradeUnavailable
@@ -39,7 +40,6 @@ async def process_signal(
     redis_client: redis.Redis,
     signal_id: str,
     config: RiskConfig,
-    account_settings: AccountSettings,
     freqtrade_client: FreqtradeClient,
 ) -> None:
     """PROJECT.md Section 5.1 steps 5-10: read the signal + account state,
@@ -56,13 +56,17 @@ async def process_signal(
         logger.warning("signal_not_found", extra={"signal_id": signal_id})
         return
 
+    try:
+        balance = await publish_balance_snapshot(redis_client, freqtrade_client)
+    except FreqtradeUnavailable as exc:
+        await _record_balance_unavailable(session, signal_row, exc)
+        return
+
     dup_key = redis_keys.decision_idempotency(str(signal_row.id))
     is_duplicate = not await redis_client.set(
         dup_key, "1", nx=True, ex=redis_keys.DECISION_IDEMPOTENCY_TTL_SECONDS
     )
-    account = await load_account_state(
-        session, starting_equity_usdt=account_settings.starting_equity_usdt
-    )
+    account = await load_account_state(session, balance=balance)
     signal_view = SignalView(
         id=str(signal_row.id),
         symbol=signal_row.symbol,
@@ -82,6 +86,32 @@ async def process_signal(
     await _handle_entry_signal(
         session, redis_client, freqtrade_client, config, signal_row, signal_view, account,
         is_duplicate,
+    )
+
+
+async def _record_balance_unavailable(
+    session: AsyncSession, signal_row: Signal, error: FreqtradeUnavailable
+) -> None:
+    """Persist an auditable rejection without inventing an equity snapshot."""
+    reason = RejectionReason.FREQTRADE_BALANCE_UNAVAILABLE
+    session.add(
+        RiskDecision(
+            trace_id=signal_row.trace_id,
+            signal_id=signal_row.id,
+            approved=False,
+            rejection_reason=reason.value,
+            equity_snapshot_usdt=None,
+        )
+    )
+    await _write_decision_audit_event(session, signal_row, False, reason)
+    await session.commit()
+    logger.error(
+        "risk_decision_blocked_balance_unavailable",
+        extra={
+            "trace_id": str(signal_row.trace_id),
+            "signal_id": str(signal_row.id),
+            "error": str(error),
+        },
     )
 
 
@@ -382,7 +412,6 @@ async def _ensure_consumer_group(redis_client: redis.Redis) -> None:
 async def _handle_message(
     session_factory: async_sessionmaker[AsyncSession],
     redis_client: redis.Redis,
-    account_settings: AccountSettings,
     freqtrade_client: FreqtradeClient,
     message_id: str,
     fields: dict,
@@ -400,9 +429,7 @@ async def _handle_message(
             # /config` (PROJECT.md Section 11) takes effect on the next
             # signal without a service restart.
             config = await load_effective_risk_config(session)
-            await process_signal(
-                session, redis_client, signal_id, config, account_settings, freqtrade_client
-            )
+            await process_signal(session, redis_client, signal_id, config, freqtrade_client)
         await redis_client.xack(
             redis_keys.SIGNALS_PENDING_STREAM, redis_keys.SIGNALS_PENDING_CONSUMER_GROUP, message_id
         )
@@ -417,7 +444,6 @@ async def _handle_message(
 
 
 async def run_consumer() -> None:
-    account_settings = AccountSettings()
     session_factory = get_session_factory()
     # socket_timeout must exceed XREADGROUP's block= wait below, or the
     # client's own read times out before Redis's blocking period elapses
@@ -442,13 +468,16 @@ async def run_consumer() -> None:
         for _, messages in response or []:
             for message_id, fields in messages:
                 await _handle_message(
-                    session_factory, redis_client, account_settings, freqtrade_client,
-                    message_id, fields,
+                    session_factory, redis_client, freqtrade_client, message_id, fields,
                 )
 
 
 if __name__ == "__main__":
     async def run_service() -> None:
-        await asyncio.gather(run_consumer(), run_reconciliation_loop())
+        await asyncio.gather(
+            run_consumer(),
+            run_reconciliation_loop(),
+            run_balance_refresh_loop(),
+        )
 
     asyncio.run(run_service())

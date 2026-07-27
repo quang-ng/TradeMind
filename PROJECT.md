@@ -101,7 +101,9 @@ graph TB
     SCHED -- "write Signal" --> PG
 
     REDIS -- "6 consume signal (stream)" --> RISK
-    RISK -- "7 read equity / positions / limits" --> PG
+    RISK -- "7a authenticated live balance" --> FT
+    RISK -- "7b read positions / limits" --> PG
+    RISK -- "cache short-lived balance snapshot" --> REDIS
     RISK -- "8 write RiskDecision" --> PG
     RISK -- "9 forceenter/forceexit (approved only)" --> FT
     FT -- "10 dry-run order" --> BINANCE
@@ -131,7 +133,7 @@ graph TB
 |---|---|---|---|
 | **LLM Analysis Service** | Given market context, return a structured `{action, confidence, reasoning}` opinion | Prompt construction, model invocation, output schema validation | Access Binance or Freqtrade; hold API keys; see account balance/equity; determine position size; retry into a non-`HOLD` fallback |
 | **Scheduler** | Trigger one trading cycle per pair on every closed candle (`TIMEFRAME`, default `5m`); orchestrate data fetch → LLM call → signal publish | Cycle timing, market data fetch, indicator computation, Redis lock/idempotency for the cycle | Approve or size trades; call Freqtrade directly |
-| **Risk Engine** | Sole authority to approve, reject, or resize every signal before execution | Risk rules (Section 9), position sizing, kill switch enforcement, RiskDecision persistence | Execute orders itself (must go through Freqtrade's API); trust LLM confidence/sizing hints without validation |
+| **Risk Engine** | Sole authority to approve, reject, or resize every signal before execution | Authenticated Freqtrade balance retrieval, risk rules (Section 9), position sizing, kill switch enforcement, RiskDecision persistence | Execute orders itself (must go through Freqtrade's API); trust LLM confidence/sizing hints without validation; substitute configured/cached equity when live balance retrieval fails |
 | **Freqtrade** | Execute and manage trades against Binance Spot; own stop-loss/ROI enforcement at the exchange-interaction layer | Exchange connectivity, order placement, dry-run wallet simulation, its own internal trade bookkeeping | Originate entry signals (its strategy has no autonomous entry logic in this system); accept commands from anything other than the Risk Engine's authenticated calls |
 | **Binance Spot** | Exchange — source of market data and (in dry-run) simulated order execution | N/A (external) | N/A |
 | **PostgreSQL** | Durable, queryable audit history: every signal, decision, order, position, and system-state change | `signals`, `risk_decisions`, `orders`, `positions`, `audit_events`, `system_state` | Be bypassed — no component may take an action that changes trading state without a corresponding row written here |
@@ -155,7 +157,7 @@ One full cycle runs independently per symbol, triggered by the Scheduler at each
 | 3 | LLM Service | Classify as `BUY`/`SELL`/`HOLD` with confidence + reasoning | Timeout, bad JSON, or invalid schema → `HOLD` |
 | 4 | Scheduler | Persist `Signal` to Postgres, publish to Redis stream | — |
 | 5 | Risk Engine | Check kill switch | Active → reject, no further evaluation |
-| 6 | Risk Engine | Evaluate rule set (Section 9) against signal + account state | Any rule fails, or signal was `HOLD` → reject with reason, no order |
+| 6 | Risk Engine | Fetch authenticated Freqtrade balance, then evaluate the rule set (Section 9) against signal + account state | Balance unavailable/malformed → `FREQTRADE_BALANCE_UNAVAILABLE`, no order; any rule fails or signal was `HOLD` → reject |
 | 7 | Risk Engine | Compute position size + stop-loss, persist `RiskDecision(approved=true)` | Only reached if step 6 fully passes |
 | 8 | Risk Engine | Call Freqtrade `forceenter`, persist `Order(SUBMITTED)` | Freqtrade unreachable → `Order(FAILED)`, alert (Section 9.4) |
 | 9 | Freqtrade → Risk Engine | Async webhook on fill/close updates `Order`/`Position` | No webhook within window → reconciliation job (Phase 5) |
@@ -200,11 +202,18 @@ sequenceDiagram
     RED->>RE: consumer group delivers signal_id
     RE->>PG: SELECT signal WHERE id = signal_id
     RE->>RED: GET killswitch:global
+    RE->>FT: GET /api/v1/balance (authenticated)
 
-    alt killswitch active
+    alt balance unavailable, unauthorized, non-USDT, or malformed
+        RE->>PG: INSERT RiskDecision(approved=false, reason=FREQTRADE_BALANCE_UNAVAILABLE, equity_snapshot=null)
+    else balance valid
+        RE->>RED: SET account:balance:latest (TTL 90s)
+        RE->>PG: SELECT open positions, daily PnL, last trade time
+    end
+
+    alt killswitch active and balance valid
         RE->>PG: INSERT RiskDecision(approved=false, reason=KILLSWITCH_ACTIVE)
-    else killswitch inactive
-        RE->>PG: SELECT equity, open positions, daily PnL, last trade time
+    else killswitch inactive and balance valid
         RE->>RE: evaluate rule set (Section 9) against signal + account state
 
         alt signal.action = HOLD OR any rule fails
@@ -329,6 +338,8 @@ trademind/
 | `LLM_API_KEY` | llm_service only | Anthropic provider only. Never injected into any other container |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | llm_service only | Ollama provider only. Base URL of the self-hosted Ollama server (the `ollama` Compose service, isolated-zone-only per Section 3) and the model tag to request |
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | freqtrade, risk_engine only | Never injected into llm_service, admin_api, or notifier |
+| `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine only | Authenticated balance reads and approved force-entry/exit calls; never injected into admin_api |
+| `BALANCE_REFRESH_INTERVAL_SECONDS` | risk_engine | Refresh cadence for the short-lived Admin balance snapshot (default 30s; risk evaluation always performs its own fresh call) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | notifier | Outbound notifications |
 | `ADMIN_API_KEY` | admin_api | Auth for the admin API |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine | Internal-network-only Freqtrade REST credentials |
@@ -375,7 +386,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `position_size_usdt` | numeric, nullable | Set only if approved |
 | `position_size_base` | numeric, nullable | BTC/ETH amount |
 | `stop_loss_price` | numeric, nullable | |
-| `equity_snapshot_usdt` | numeric | Account equity at decision time |
+| `equity_snapshot_usdt` | numeric, nullable | Authenticated Freqtrade account equity at decision time; `null` only when the decision was rejected because no valid balance could be obtained |
 | `risk_pct_applied` | numeric, nullable | |
 | `created_at` | timestamptz | |
 
@@ -659,6 +670,13 @@ only the Risk Engine may call its authenticated `forceenter` endpoint after all
 rules below pass. Pair uniqueness, total exposure, sizing, and available balance
 remain independent gates.
 
+Before any signal can reach these rules, the Risk Engine calls Freqtrade's
+authenticated `GET /api/v1/balance`. `equity_usdt` is the response's total
+account value expressed in the configured USDT stake currency;
+`free_balance_usdt` is the USDT currency row's immediately available `free`
+amount. The response is schema-validated and must contain exactly one
+non-negative USDT stake row. There is no configured-equity fallback.
+
 ```json
 {
   "risk_per_trade_pct": 0.01,
@@ -737,7 +755,7 @@ Because this table is the only exit mechanism that fires unconditionally on a ti
 
 ### 9.3 Rejection reasons (enum)
 
-`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`, `INTERNAL_ERROR` (Section 9.4's unhandled-exception fallback), `NO_POSITION_TO_EXIT` (Section 9.1.1)
+`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`, `FREQTRADE_BALANCE_UNAVAILABLE` (authenticated balance missing/invalid), `INTERNAL_ERROR` (Section 9.4's unhandled-exception fallback), `NO_POSITION_TO_EXIT` (Section 9.1.1)
 
 ### 9.4 Failure Modes & Safe Defaults
 
@@ -748,6 +766,7 @@ The Risk Engine is the system's fail-closed authority. This table governs behavi
 | LLM Service unreachable/times out | `Signal(action=HOLD, reason=llm_failure)` — cycle completes normally, no trade considered |
 | Redis unavailable | Scheduler cannot acquire locks or publish signals → **no new cycles run**. Existing open positions are untouched (Freqtrade manages its own stop-loss independently of Redis) |
 | PostgreSQL unavailable | Risk Engine refuses to evaluate any signal (cannot read account state or write an audit row) → **fail closed, no approvals**. This is a deliberate trade-off: no audit row means no trade, ever |
+| Freqtrade balance endpoint unreachable, unauthorized, non-USDT, or malformed | Persist `RiskDecision(approved=false, reason=FREQTRADE_BALANCE_UNAVAILABLE, equity_snapshot_usdt=null)`, invalidate the Redis balance snapshot, and submit no order. Never use a configured or stale cached balance for sizing |
 | Freqtrade API unreachable at approval time | `RiskDecision(approved=true)` is written, but `Order` is written as `FAILED` with the error; Telegram alerts immediately — this is treated as an operational incident, not a silent retry loop |
 | Freqtrade webhook never arrives (network blip) | Order remains `SUBMITTED`; the Risk Engine reconciliation loop polls Freqtrade's trade-detail API for orders older than 10 minutes. It also compares every PostgreSQL `OPEN` position with Freqtrade so autonomous ROI/stop-loss exits are recovered even when no TradeMind exit order existed. Unambiguous fills/exits are persisted; missing or ambiguous state remains unchanged and emits one `RECONCILIATION_REQUIRED` operator alert |
 | Binance API errors/rate limits during dry-run simulation | Handled by Freqtrade's own retry/backoff; TradeMind does not add a second retry layer on top (avoids duplicate-order risk) |
@@ -784,6 +803,7 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 | `idempotency:decision:{signal_id}` | string | 24h | Prevents the Risk Engine from double-processing a redelivered stream message |
 | `signals:pending` | stream (consumer group `risk_engine`) | n/a (trimmed by length) | Queue of signal IDs awaiting risk evaluation |
 | `signals:latest:{symbol}` | string (cached JSON) | = timeframe | Fast read for the admin API's `/status` endpoint |
+| `account:balance:latest` | string (typed JSON) | 90 sec | Latest authenticated Freqtrade equity/free-USDT snapshot. Refreshed every 30 seconds by Risk Engine and invalidated on any refresh failure; Admin `/status` returns `503` when absent, invalid, or stale |
 | `killswitch:global` | string (`"1"`/`"0"`) | none — persistent | Cached mirror of `system_state.killswitch_enabled`; Postgres is authoritative, this is read on every Risk Engine evaluation for latency |
 | `cooldown:{symbol}` | string | = `cooldown_minutes` | Set when a position on `{symbol}` closes; presence blocks new entries (Rule 10) |
 | `ratelimit:llm:{provider}` | counter | 1 min sliding window | Client-side rate limiting of LLM calls |
@@ -801,7 +821,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | Method | Path | Purpose | Auth |
 |---|---|---|---|
 | `GET` | `/health` | Liveness probe | none |
-| `GET` | `/status` | Killswitch state, open position count, last cycle time per pair, equity snapshot | API key |
+| `GET` | `/status` | Killswitch state, open position count, last cycle time per pair, fresh Freqtrade equity and free-USDT snapshot; `503` when unavailable | API key |
 | `GET` | `/signals?symbol=&limit=` | Recent signals | API key |
 | `GET` | `/signals/{id}` | Single signal detail incl. raw LLM response | API key |
 | `GET` | `/decisions?symbol=&limit=` | Recent risk decisions with reasons | API key |
@@ -828,6 +848,7 @@ The React Operator Console is served on host loopback port `3000` by default and
   "dry_run": true,
   "open_positions": 1,
   "equity_usdt": 5000.00,
+  "free_balance_usdt": 4200.00,
   "daily_pnl_pct": -0.4,
   "pairs": {
     "BTC/USDT": { "last_cycle_at": "2026-07-15T13:00:15Z", "last_action": "BUY" },

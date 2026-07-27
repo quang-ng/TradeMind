@@ -64,7 +64,9 @@ class RiskDecision(Base):
     position_size_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
     position_size_base: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
     stop_loss_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
-    equity_snapshot_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    equity_snapshot_usdt: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
     risk_pct_applied: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

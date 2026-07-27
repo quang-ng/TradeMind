@@ -10,6 +10,7 @@ export interface SystemStatus {
   dry_run: boolean
   open_positions: number
   equity_usdt: string
+  free_balance_usdt: string
   daily_pnl_pct: string
   pairs: Record<string, PairStatus>
 }

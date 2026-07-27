@@ -1,24 +1,35 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from common.config import AccountSettings, SchedulerSettings
+from common import redis_keys
+from common.account_balance import AccountBalanceSnapshot
+from common.config import SchedulerSettings
 from common.db.models import Position, Signal, SystemState
 from common.enums import PositionStatus
 from common.risk_config_store import load_effective_risk_config
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_api_key
-from ..deps import get_db_session
+from ..deps import get_db_session, get_redis_client
 from ..schemas import PairStatus, StatusOut
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 @router.get("/status", response_model=StatusOut)
-async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusOut:
-    """PROJECT.md Section 11 `GET /status`."""
+async def get_status(
+    session: AsyncSession = Depends(get_db_session),
+    redis_client: Redis = Depends(get_redis_client),
+) -> StatusOut:
+    """PROJECT.md Section 11 `GET /status`.
+
+    Account equity is never synthesized. The endpoint fails unavailable when
+    the Risk Engine has not published a fresh, typed Freqtrade snapshot.
+    """
     state = await session.get(SystemState, 1)
     killswitch_enabled = bool(state and state.killswitch_enabled)
     config = await load_effective_risk_config(session)
@@ -33,7 +44,27 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
         .all()
     )
 
-    starting_equity_usdt = AccountSettings().starting_equity_usdt
+    raw_balance = await redis_client.get(redis_keys.ACCOUNT_BALANCE_SNAPSHOT_KEY)
+    try:
+        balance = (
+            AccountBalanceSnapshot.model_validate_json(raw_balance)
+            if raw_balance is not None
+            else None
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account balance unavailable",
+        ) from exc
+    if balance is None or not balance.is_fresh(
+        now=datetime.now(timezone.utc),
+        max_age_seconds=redis_keys.ACCOUNT_BALANCE_SNAPSHOT_TTL_SECONDS,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="account balance unavailable",
+        )
+
     today = datetime.now(timezone.utc).date()
     closed_positions = (
         (
@@ -44,14 +75,7 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
         .scalars()
         .all()
     )
-    total_realized_pnl_usdt = sum(
-        (position.pnl_usdt or Decimal("0") for position in closed_positions),
-        start=Decimal("0"),
-    )
-    # Realized P&L only — unrealized P&L on open positions and real Freqtrade
-    # fees/slippage still require the live balance query AccountSettings'
-    # docstring defers to Phase 3.
-    equity_usdt = starting_equity_usdt + total_realized_pnl_usdt
+    equity_usdt = balance.equity_usdt
     daily_pnl_usdt = sum(
         (
             position.pnl_usdt or Decimal("0")
@@ -82,6 +106,7 @@ async def get_status(session: AsyncSession = Depends(get_db_session)) -> StatusO
         dry_run=config.dry_run,
         open_positions=len(open_positions),
         equity_usdt=equity_usdt,
+        free_balance_usdt=balance.free_balance_usdt,
         daily_pnl_pct=daily_pnl_pct,
         pairs=pairs,
     )
