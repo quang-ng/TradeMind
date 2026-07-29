@@ -17,7 +17,7 @@ class ExternalSignalStrategy(IStrategy):
     (`RiskConfig.max_stop_loss_pct`) and stays the fallback. The tighter,
     per-trade ATR-based `stop_loss_price` the Risk Engine computes
     (PROJECT.md Section 9.2) is passed at entry via `forceenter`'s
-    `entry_tag` (`sl:<price>`, see `risk_engine/app/main.py`) and applied
+    `entry_tag` (`slpct:<distance>`, see `risk_engine/app/main.py`) and applied
     per-trade by `custom_stoploss()` below, which falls back to the static
     `stoploss` if the tag is missing or malformed — it must never fail
     open to "no stop."
@@ -72,16 +72,25 @@ class ExternalSignalStrategy(IStrategy):
         after_fill: bool,
         **kwargs,
     ) -> float | None:
-        """Apply the Risk Engine's per-trade ATR stop, carried in via
-        `forceenter`'s `entry_tag` as `sl:<absolute price>`
-        (`risk_engine/app/main.py::_submit_entry_order`). Any missing or
-        malformed tag falls back to the static `stoploss` — never fail
-        open to no stop at all."""
+        """Apply the Risk Engine's per-trade ATR stop.
+
+        New entries carry `slpct:<distance>` so the absolute stop is derived
+        from the authoritative filled `Trade.open_rate`, not the earlier
+        signal price. Legacy `sl:<absolute price>` tags remain supported for
+        already-open trades. Missing or malformed tags fail closed to the
+        static strategy stop.
+        """
         tag = trade.enter_tag or ""
-        if not tag.startswith("sl:"):
-            return self.stoploss
         try:
-            stop_rate = float(tag[len("sl:") :])
-        except ValueError:
+            if tag.startswith("slpct:"):
+                stop_distance_pct = float(tag[len("slpct:") :])
+                if not 0 < stop_distance_pct <= abs(self.stoploss):
+                    return self.stoploss
+                stop_rate = trade.open_rate * (1 - stop_distance_pct)
+            elif tag.startswith("sl:"):
+                stop_rate = float(tag[len("sl:") :])
+            else:
+                return self.stoploss
+        except (TypeError, ValueError):
             return self.stoploss
         return stoploss_from_absolute(stop_rate=stop_rate, current_rate=current_rate)

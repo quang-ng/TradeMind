@@ -27,13 +27,14 @@ def validate_signal_semantics(
     Once a response exists, however, the documented bearish confirmations
     (`context.exit_confirmations`, computed once by `ContextBuilder`) are
     deterministic facts. Enforcing them here prevents a small model from
-    returning HOLD while its own supplied evidence satisfies the SELL
-    rubric, or from proposing an action that is impossible in the current
-    position state.
+    proposing an action that contradicts the numeric inputs or is impossible
+    in the current position state. A model HOLD is never promoted into a
+    trade action by validation.
 
-    The rubric is symmetric: it forces a profit-taking exit once
+    The rubric is symmetric: it confirms a model-proposed profit-taking exit once
     `unrealized_pnl_pct` clears `min_exit_profit_pct`, and separately forces
-    a loss-cutting exit once it falls below `-min_exit_loss_pct` — either
+    a model-proposed loss-cutting exit once it falls below
+    `-min_exit_loss_pct` — either
     way gated on the same cross-category confirmation bar. These two bands
     can never both hold at once, so at most one of them fires. A bare `> 0`
     isn't enough for the profit side — analyze latency plus forceexit
@@ -61,7 +62,12 @@ def validate_signal_semantics(
     confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
     confirmations_sufficient = len(confirmations) >= 2 and len(confirmed_categories) >= 2
 
-    if has_open_position and confirmations_sufficient and (is_profitable or is_losing):
+    if (
+        output.action == Action.SELL
+        and has_open_position
+        and confirmations_sufficient
+        and (is_profitable or is_losing)
+    ):
         if is_profitable:
             reasoning = (
                 f"Deterministic exit rubric found {len(confirmations)} independent "
@@ -100,17 +106,45 @@ def validate_signal_semantics(
             exit_confirmations=confirmations,
         )
 
-    action_is_valid = output.action == Action.HOLD or (
-        output.action == Action.BUY and not has_open_position
-    )
-    if action_is_valid:
+    if output.action == Action.HOLD:
         return SemanticValidationResult(
             output=output,
             action_changed=False,
             exit_confirmations=confirmations,
         )
 
-    if not has_open_position:
+    normalization_indicators = confirmations
+    normalization_invalidation = (
+        "At least two bearish confirmations spanning two different categories "
+        "(trend, momentum, price action) while the position is open and either "
+        "profitable beyond the margin or losing beyond the loss-cut threshold."
+    )
+    if output.action == Action.BUY and not has_open_position:
+        entry_confirmations = context.entry_confirmations
+        normalization_indicators = entry_confirmations
+        normalization_invalidation = (
+            "At least three numeric entry confirmations including both trend "
+            "and momentum while no position is open."
+        )
+        entry_categories = {_ENTRY_CONFIRMATION_CATEGORIES[c] for c in entry_confirmations}
+        entry_is_sufficient = (
+            len(entry_confirmations) >= 3
+            and "trend" in entry_categories
+            and "momentum" in entry_categories
+        )
+        if entry_is_sufficient:
+            return SemanticValidationResult(
+                output=output,
+                action_changed=False,
+                exit_confirmations=confirmations,
+            )
+        reason = (
+            "BUY suppressed because deterministic indicator validation found "
+            f"{len(entry_confirmations)} confirmation(s) "
+            f"({', '.join(entry_confirmations) or 'none'}); entry requires at least "
+            "three numeric confirmations including both trend and momentum."
+        )
+    elif not has_open_position:
         reason = "SELL suppressed because there is no open position."
     elif pnl is None:
         reason = (
@@ -142,12 +176,8 @@ def validate_signal_semantics(
             "action": Action.HOLD,
             "confidence": min(output.confidence, 0.64),
             "reasoning": reason,
-            "key_indicators": list(confirmations),
-            "invalidation_condition": (
-                "At least two bearish confirmations spanning two different categories "
-                "(trend, momentum, price action) while the position is open and either "
-                "profitable beyond the margin or losing beyond the loss-cut threshold."
-            ),
+            "key_indicators": list(normalization_indicators),
+            "invalidation_condition": normalization_invalidation,
         }
     )
     return SemanticValidationResult(
@@ -168,4 +198,13 @@ _CONFIRMATION_CATEGORIES = {
     "rsi_below_45": "momentum",
     "lower_highs_and_lows": "price_action",
     "falling_price_on_high_volume": "price_action",
+}
+
+_ENTRY_CONFIRMATION_CATEGORIES = {
+    "price_above_ema50_and_ema200": "trend",
+    "ema50_above_ema200": "trend",
+    "bullish_macd": "momentum",
+    "rsi_45_to_70": "momentum",
+    "higher_highs_and_lows": "price_action",
+    "rising_price_on_high_volume": "price_action",
 }

@@ -55,7 +55,7 @@ class MarketContext(BaseModel):
     """Strongly typed, normalized view of one `/analyze` request. Built once
     by `ContextBuilder` and read by every later pipeline stage — none of
     which call the LLM or decide BUY/SELL/HOLD from it directly except the
-    Response Validator's deterministic exit rubric.
+    Response Validator's deterministic entry/exit safety validation.
 
     `request` retains the original wire model so `PromptBuilder` can
     reproduce the exact Section 8.1 JSON the LLM receives byte-for-byte
@@ -72,6 +72,9 @@ class MarketContext(BaseModel):
     momentum: MomentumMetrics
     volatility: VolatilityMetrics
     volume: VolumeMetrics
+    # Deterministic bullish facts used to reject model BUY narratives that
+    # contradict the supplied indicator values.
+    entry_confirmations: tuple[str, ...]
     # PROJECT.md Section 8.3's deterministic bearish exit confirmations,
     # computed unconditionally (whether or not a position is open) — the
     # Response Validator's semantic rubric decides which ones matter.

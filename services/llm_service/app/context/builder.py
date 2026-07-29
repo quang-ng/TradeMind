@@ -30,6 +30,7 @@ class ContextBuilder:
             momentum=self._momentum(indicators),
             volatility=self._volatility(latest, indicators),
             volume=self._volume(latest, indicators),
+            entry_confirmations=self._entry_confirmations(candles, indicators),
             exit_confirmations=self._exit_confirmations(candles, indicators),
         )
 
@@ -62,6 +63,38 @@ class ContextBuilder:
         return VolumeMetrics(
             latest_above_sma20=latest is not None and latest.v > indicators.volume_sma_20
         )
+
+    @staticmethod
+    def _entry_confirmations(candles: list[Candle], indicators: Indicators) -> tuple[str, ...]:
+        """Numeric BUY evidence independent of the model's prose.
+
+        The small local model may describe an EMA/RSI/MACD relationship
+        incorrectly while still assigning high confidence. These facts let
+        semantic validation reject contradictory BUYs before they can reach
+        the Risk Engine.
+        """
+        if not candles:
+            return ()
+
+        latest = candles[-1]
+        confirmations: list[str] = []
+        if latest.c > indicators.ema_50 and latest.c > indicators.ema_200:
+            confirmations.append("price_above_ema50_and_ema200")
+        if indicators.ema_50 > indicators.ema_200:
+            confirmations.append("ema50_above_ema200")
+        if indicators.macd.histogram > 0 and indicators.macd.macd > indicators.macd.signal:
+            confirmations.append("bullish_macd")
+        if 45 <= indicators.rsi_14 < 70:
+            confirmations.append("rsi_45_to_70")
+        if len(candles) >= 3:
+            recent = candles[-3:]
+            higher_highs = all(left.h < right.h for left, right in zip(recent, recent[1:]))
+            higher_lows = all(left.l < right.l for left, right in zip(recent, recent[1:]))
+            if higher_highs and higher_lows:
+                confirmations.append("higher_highs_and_lows")
+        if len(candles) >= 2 and latest.c > candles[-2].c and latest.v > indicators.volume_sma_20:
+            confirmations.append("rising_price_on_high_volume")
+        return tuple(confirmations)
 
     @staticmethod
     def _exit_confirmations(candles: list[Candle], indicators: Indicators) -> tuple[str, ...]:

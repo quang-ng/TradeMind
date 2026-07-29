@@ -165,7 +165,7 @@ def test_analyze_falls_back_to_hold_on_timeout():
     assert body["reasoning"] == "llm_timeout"
 
 
-def test_analyze_normalizes_model_hold_to_sell_for_unambiguous_bearish_exit():
+def test_analyze_never_promotes_model_hold_to_sell_for_bearish_exit():
     app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
         response_text=json.dumps(
             {
@@ -185,9 +185,9 @@ def test_analyze_normalizes_model_hold_to_sell_for_unambiguous_bearish_exit():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["action"] == "SELL"
+    assert body["action"] == "HOLD"
     assert body["raw_response"]["model_action"] == "HOLD"
-    assert body["raw_response"]["semantic_action"] == "SELL"
+    assert body["raw_response"]["semantic_action"] == "HOLD"
     assert len(body["raw_response"]["exit_confirmations"]) >= 3
 
 

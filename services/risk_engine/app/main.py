@@ -279,7 +279,16 @@ async def _submit_entry_order(
     """PROJECT.md Section 5.1 step 8-9. Freqtrade unreachable -> `Order`
     persisted as `FAILED` (Section 9.4), never blocks the already-persisted
     `RiskDecision(approved=true)`."""
-    entry_tag = f"sl:{stop_loss_price}" if stop_loss_price is not None else None
+    # Carry the distance rather than a pre-entry absolute price. Freqtrade
+    # chooses the live entry rate when forceenter runs, which can differ
+    # materially from the earlier signal price. The strategy derives the
+    # absolute stop from the authoritative Trade.open_rate after fill.
+    stop_distance_pct = (
+        Decimal("1") - (stop_loss_price / signal_row.price)
+        if stop_loss_price is not None and signal_row.price > 0
+        else None
+    )
+    entry_tag = f"slpct:{stop_distance_pct}" if stop_distance_pct is not None else None
     try:
         response = await freqtrade_client.forceenter(
             pair=signal_row.symbol, stake_amount=position_size_usdt, entry_tag=entry_tag

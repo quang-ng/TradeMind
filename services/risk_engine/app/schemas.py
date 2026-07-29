@@ -71,6 +71,7 @@ class FreqtradeTrade(BaseModel):
     amount: Decimal | None = None
     open_rate: Decimal | None = None
     close_rate: Decimal | None = None
+    enter_tag: str | None = None
     profit_abs: Decimal | None = None
     profit_ratio: Decimal | None = None
     open_date: datetime | None = None

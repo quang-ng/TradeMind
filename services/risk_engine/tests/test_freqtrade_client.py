@@ -2,13 +2,17 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from common.config import FreqtradeSettings
 
 from risk_engine.app.freqtrade_client import FreqtradeClient, FreqtradeUnavailable
 
 
 def _client_with_handler(handler) -> FreqtradeClient:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://test")
-    return FreqtradeClient(http_client=http_client)
+    return FreqtradeClient(
+        settings=FreqtradeSettings(freqtrade_exit_retry_delay_seconds=0),
+        http_client=http_client,
+    )
 
 
 async def test_forceenter_posts_pair_side_and_stake_amount():
@@ -29,19 +33,26 @@ async def test_forceenter_posts_pair_side_and_stake_amount():
     assert b'"stakeamount":250.0' in captured["body"]
 
 
-async def test_forceenter_includes_entrytag_when_provided():
+async def test_forceenter_includes_and_verifies_entry_tag_when_provided():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.read()
-        return httpx.Response(200, json={"status": "Force entry accepted"})
+        return httpx.Response(
+            200,
+            json={
+                "trade_id": 42,
+                "status": "Force entry accepted",
+                "enter_tag": "slpct:0.02",
+            },
+        )
 
     client = _client_with_handler(handler)
     await client.forceenter(
-        pair="BTC/USDT", stake_amount=Decimal("250.00"), entry_tag="sl:59000"
+        pair="BTC/USDT", stake_amount=Decimal("250.00"), entry_tag="slpct:0.02"
     )
 
-    assert b'"entrytag":"sl:59000"' in captured["body"]
+    assert b'"entry_tag":"slpct:0.02"' in captured["body"]
 
 
 async def test_forceenter_omits_entrytag_when_not_provided():
@@ -54,7 +65,7 @@ async def test_forceenter_omits_entrytag_when_not_provided():
     client = _client_with_handler(handler)
     await client.forceenter(pair="BTC/USDT", stake_amount=Decimal("250.00"))
 
-    assert b"entrytag" not in captured["body"]
+    assert b"entry_tag" not in captured["body"]
 
 
 async def test_forceexit_posts_trade_id():
@@ -71,6 +82,29 @@ async def test_forceexit_posts_trade_id():
     assert result == {"result": "Created exit order"}
     assert captured["url"].endswith("/api/v1/forceexit")
     assert b'"tradeid":"42"' in captured["body"]
+    assert b'"ordertype":"market"' in captured["body"]
+
+
+async def test_forceenter_emergency_exits_when_stop_tag_is_not_attached():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url).endswith("/api/v1/forceenter"):
+            return httpx.Response(
+                200,
+                json={"trade_id": 42, "status": "accepted", "enter_tag": "force_entry"},
+            )
+        return httpx.Response(200, json={"result": "Created exit order"})
+
+    client = _client_with_handler(handler)
+    with pytest.raises(FreqtradeUnavailable, match="protective stop tag was not attached"):
+        await client.forceenter(
+            pair="BTC/USDT", stake_amount=Decimal("250.00"), entry_tag="slpct:0.02"
+        )
+
+    assert len(requests) == 2
+    assert str(requests[1].url).endswith("/api/v1/forceexit")
 
 
 async def test_get_trade_returns_typed_trade_state():
@@ -178,12 +212,17 @@ async def test_raises_freqtrade_unavailable_on_http_error():
 
 
 async def test_raises_freqtrade_unavailable_on_connection_error():
+    attempts = 0
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
         raise httpx.ConnectError("connection refused", request=request)
 
     client = _client_with_handler(handler)
     with pytest.raises(FreqtradeUnavailable):
         await client.forceexit(trade_id=1)
+    assert attempts == 3
 
 
 async def test_raises_freqtrade_unavailable_on_malformed_json():

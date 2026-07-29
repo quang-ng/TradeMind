@@ -165,6 +165,11 @@ class FreqtradeSettings(BaseSettings):
     balance_refresh_interval_seconds: float = 30.0
     reconciliation_interval_seconds: float = 60.0
     reconciliation_order_age_minutes: int = 10
+    # Risk-reducing exits retry promptly inside the bounded request path.
+    # Entries are never retried because duplicate entry submission would
+    # increase exposure.
+    freqtrade_exit_retry_attempts: int = 3
+    freqtrade_exit_retry_delay_seconds: float = 1.0
 
 
 class WebhookSettings(BaseSettings):

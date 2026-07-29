@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -48,12 +49,45 @@ class FreqtradeClient:
             "stakeamount": float(stake_amount),
         }
         if entry_tag is not None:
-            payload["entrytag"] = entry_tag
-        return await self._post("/api/v1/forceenter", payload)
+            # Freqtrade 2026.6 expects `entry_tag`. The former `entrytag`
+            # spelling was silently ignored, leaving trades on the broad
+            # strategy-wide fallback stop.
+            payload["entry_tag"] = entry_tag
+        response = await self._post("/api/v1/forceenter", payload)
+        if entry_tag is not None and response.get("enter_tag") != entry_tag:
+            # The entry may already have been submitted. Reduce exposure
+            # immediately instead of reporting a protected order when the
+            # authoritative response proves otherwise.
+            trade_id = response.get("trade_id") or response.get("id")
+            emergency_exit_error = ""
+            if trade_id is not None:
+                try:
+                    await self.forceexit(trade_id=int(trade_id))
+                except (FreqtradeUnavailable, TypeError, ValueError) as exc:
+                    emergency_exit_error = f"; emergency exit failed: {exc}"
+            raise FreqtradeUnavailable(
+                "protective stop tag was not attached "
+                f"(expected={entry_tag!r}, actual={response.get('enter_tag')!r})"
+                f"{emergency_exit_error}"
+            )
+        return response
 
     async def forceexit(self, *, trade_id: int) -> dict:
-        """PROJECT.md Section 5.1 (exit path, Phase 3)."""
-        return await self._post("/api/v1/forceexit", {"tradeid": str(trade_id)})
+        """PROJECT.md Section 5.1 (exit path, Phase 3).
+
+        Risk exits use a market order so a resting limit order cannot leave
+        a deterministic loss cut unresolved while exposure keeps growing.
+        """
+        payload = {"tradeid": str(trade_id), "ordertype": "market"}
+        attempts = max(1, self._settings.freqtrade_exit_retry_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._post("/api/v1/forceexit", payload)
+            except FreqtradeUnavailable:
+                if attempt == attempts:
+                    raise
+                await asyncio.sleep(self._settings.freqtrade_exit_retry_delay_seconds)
+        raise AssertionError("unreachable")
 
     async def get_trade(self, *, trade_id: int) -> FreqtradeTrade:
         """Return Freqtrade's authoritative state for one submitted trade."""

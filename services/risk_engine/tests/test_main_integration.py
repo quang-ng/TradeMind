@@ -7,6 +7,7 @@ fakes), this exercises real Postgres reads/writes — faking SQLAlchemy Core
 skips gracefully if no Postgres is reachable (e.g. `make up` wasn't run).
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -178,7 +179,11 @@ async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_se
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = request.read()
-        return httpx.Response(200, json={"trade_id": 99, "status": "ok"})
+        body = json.loads(captured["body"])
+        return httpx.Response(
+            200,
+            json={"trade_id": 99, "status": "ok", "enter_tag": body["entry_tag"]},
+        )
 
     async with db_session_factory() as session:
         await process_signal(
@@ -201,7 +206,7 @@ async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_se
         assert order.freqtrade_trade_id == 99
         assert order.side == "BUY"
         assert decision.stop_loss_price is not None
-        assert b'"entrytag":"sl:' in captured["body"]
+        assert b'"entry_tag":"slpct:' in captured["body"]
 
 
 async def test_entry_signal_approved_but_freqtrade_unreachable_marks_order_failed(
