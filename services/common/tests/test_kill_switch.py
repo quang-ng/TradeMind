@@ -3,6 +3,7 @@ reads/writes (see services/risk_engine/tests/test_main_integration.py for
 the same rationale). Skips gracefully if no Postgres is reachable."""
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select, text
@@ -38,7 +39,12 @@ async def db_session_factory():
 
     async with session_factory() as session:
         await session.execute(text("DELETE FROM audit_events"))
-        await session.execute(text("UPDATE system_state SET killswitch_enabled = false"))
+        await session.execute(
+            text(
+                "UPDATE system_state "
+                "SET killswitch_enabled = false, consecutive_loss_reset_at = NULL"
+            )
+        )
         await session.commit()
 
     yield session_factory
@@ -78,6 +84,7 @@ async def test_enable_writes_postgres_redis_and_audit_event(db_session_factory):
 
 async def test_disable_reverts_postgres_and_redis(db_session_factory):
     redis_client = FakeRedis()
+    before_disable = datetime.now(timezone.utc)
     async with db_session_factory() as session:
         await kill_switch.enable(
             session, redis_client, reason="r1", updated_by="api:admin", trace_id=uuid.uuid4()
@@ -99,6 +106,8 @@ async def test_disable_reverts_postgres_and_redis(db_session_factory):
         assert await kill_switch.is_enabled(session) is False
         state = await session.get(SystemState, 1)
         assert state.killswitch_updated_by == "telegram:12345"
+        assert state.consecutive_loss_reset_at is not None
+        assert state.consecutive_loss_reset_at >= before_disable
 
         event = (
             await session.execute(

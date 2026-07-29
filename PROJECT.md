@@ -448,6 +448,7 @@ Singleton table (single row, `id = 1`), Postgres as durable source of truth; Red
 | `killswitch_enabled` | boolean | Default `false` |
 | `killswitch_reason` | text, nullable | |
 | `killswitch_updated_by` | text, nullable | API caller or `SYSTEM` (auto-trip) |
+| `consecutive_loss_reset_at` | timestamptz, nullable | Set when an operator explicitly disables the kill switch; closed positions at or before this boundary remain in the audit history but do not count toward a new consecutive-loss streak |
 | `updated_at` | timestamptz | |
 
 ### 7.7 Example: a fully approved cycle, in JSON
@@ -707,7 +708,7 @@ non-negative USDT stake row. There is no configured-equity fallback.
 | 6 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
 | 7 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
 | 8 | Max daily loss (circuit breaker) | `max_daily_loss_pct = 3%` | If realized+unrealized daily PnL ≤ `-3%` of equity, **auto-enable the global kill switch** (`SYSTEM` actor) and reject with `DAILY_LOSS_LIMIT_HIT` |
-| 9 | Consecutive losses | `consecutive_loss_limit = 3` | After 3 consecutive losing closed positions, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. Trading resumes only after an explicit operator reset |
+| 9 | Consecutive losses | `consecutive_loss_limit = 3` | After 3 consecutive losing closed positions since the last explicit operator reset, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. Disabling the kill switch records a reset boundary without deleting or modifying position history; only losses closed after that boundary form the next streak |
 | 10 | Per-pair cooldown | `cooldown_minutes = 120` | Reject with `COOLDOWN_ACTIVE` if a position on this pair closed within the cooldown window |
 | 11 | Insufficient balance | Freqtrade-reported free balance | Reject with `INSUFFICIENT_BALANCE` if computed size exceeds available funds |
 | 12 | Stop-loss required | every approved entry carries a stop | No conditional — stop-loss price is always computed and attached (Section 9.2); this is not a rejection rule, it's an invariant of approval |
@@ -832,7 +833,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `GET` | `/orders/{id}` | Single order detail | API key |
 | `GET` | `/audit?trace_id=` | Full timeline for one trading cycle | API key |
 | `POST` | `/killswitch/enable` | `{ "reason": string }` — halt all new entries immediately | API key |
-| `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation | API key |
+| `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation and acknowledge the prior consecutive-loss streak | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
 | `PATCH` | `/config` | Update risk parameters; writes `CONFIG_CHANGED` audit event | API key (Section 14: `dry_run` flips require extra confirmation) |
 | `GET` | `/config/llm` | Current effective LLM provider/model/temperature (Section 8.4 shape) | API key |

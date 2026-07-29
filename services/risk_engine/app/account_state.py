@@ -1,13 +1,38 @@
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from common.account_balance import AccountBalanceSnapshot
-from common.db.models import Position
+from common.db.models import Position, SystemState
 from common.enums import PositionStatus
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .schemas import AccountState
+
+
+def _count_consecutive_losses(
+    closed_positions: Sequence[Position],
+    *,
+    reset_at: datetime | None,
+) -> tuple[int, datetime | None]:
+    """Count the newest uninterrupted loss streak after operator reset."""
+    consecutive_losses = 0
+    last_loss_closed_at: datetime | None = None
+    for position in closed_positions:
+        if (
+            reset_at is not None
+            and position.closed_at is not None
+            and position.closed_at <= reset_at
+        ):
+            break
+        if position.pnl_usdt is not None and position.pnl_usdt < 0:
+            consecutive_losses += 1
+            if last_loss_closed_at is None:
+                last_loss_closed_at = position.closed_at
+        else:
+            break
+    return consecutive_losses, last_loss_closed_at
 
 
 async def load_account_state(
@@ -47,21 +72,20 @@ async def load_account_state(
         .scalars()
         .all()
     )
+    system_state = await session.get(SystemState, 1)
+    consecutive_loss_reset_at = (
+        system_state.consecutive_loss_reset_at if system_state is not None else None
+    )
 
     symbol_last_closed_at: dict[str, datetime] = {}
     for position in closed_positions:
         if position.closed_at is not None:
             symbol_last_closed_at.setdefault(position.symbol, position.closed_at)
 
-    consecutive_losses = 0
-    last_loss_closed_at: datetime | None = None
-    for position in closed_positions:
-        if position.pnl_usdt is not None and position.pnl_usdt < 0:
-            consecutive_losses += 1
-            if last_loss_closed_at is None:
-                last_loss_closed_at = position.closed_at
-        else:
-            break
+    consecutive_losses, last_loss_closed_at = _count_consecutive_losses(
+        closed_positions,
+        reset_at=consecutive_loss_reset_at,
+    )
 
     equity_usdt = balance.equity_usdt
     today = datetime.now(timezone.utc).date()

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,9 +63,13 @@ async def disable(
     if state is None:
         state = SystemState(id=1)
         session.add(state)
+    reset_at = datetime.now(timezone.utc)
     state.killswitch_enabled = False
     state.killswitch_reason = reason
     state.killswitch_updated_by = updated_by
+    # Resuming acknowledges the prior loss streak. Preserve immutable
+    # position history and advance the counting boundary instead.
+    state.consecutive_loss_reset_at = reset_at
     await session.flush()
 
     session.add(

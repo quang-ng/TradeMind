@@ -46,7 +46,12 @@ async def db_session_factory():
     async with session_factory() as session:
         for table in _TABLES:
             await session.execute(text(f"DELETE FROM {table}"))
-        await session.execute(text("UPDATE system_state SET killswitch_enabled = false"))
+        await session.execute(
+            text(
+                "UPDATE system_state "
+                "SET killswitch_enabled = false, consecutive_loss_reset_at = NULL"
+            )
+        )
         await session.execute(text("UPDATE risk_config_state SET overrides = NULL WHERE id = 1"))
         await session.execute(text("UPDATE llm_config_state SET overrides = NULL WHERE id = 1"))
         await session.commit()

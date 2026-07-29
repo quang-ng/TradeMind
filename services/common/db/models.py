@@ -133,6 +133,9 @@ class SystemState(Base):
     killswitch_enabled: Mapped[bool] = mapped_column(default=False)
     killswitch_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     killswitch_updated_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    consecutive_loss_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
