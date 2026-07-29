@@ -259,6 +259,9 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
       LLM_SERVICE_URL: http://llm_service:8000/analyze
+      # Status pair coverage must match the Scheduler and Freqtrade
+      # whitelist; SchedulerSettings reads the same comma-separated value.
+      SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,XRP/USDT}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
