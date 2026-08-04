@@ -321,6 +321,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       ADMIN_API_URL: ${ADMIN_API_URL:-http://admin_api:8000}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      DAILY_PNL_REPORT_HOUR_UTC: ${DAILY_PNL_REPORT_HOUR_UTC:-0}
     depends_on:
       migrate:
         condition: service_completed_successfully

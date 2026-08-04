@@ -205,3 +205,4 @@ class NotifierSettings(BaseSettings):
     admin_api_key: str = ""
     audit_poll_interval_seconds: float = 3.0
     telegram_poll_interval_seconds: float = 2.0
+    daily_pnl_report_hour_utc: int = 0

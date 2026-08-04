@@ -901,7 +901,7 @@ The MVP is complete when all of the following hold:
 - [ ] Every `Signal`, `RiskDecision`, `Order`, and `Position` change is reconstructable end-to-end from Postgres via a single `trace_id`.
 - [ ] The global kill switch, once enabled (manually or via the daily-loss circuit breaker), blocks every subsequent entry until explicitly disabled, verified by an integration test.
 - [ ] The operator console displays system status, equity/P&L, signals, risk decisions, orders, positions, raw model detail, and trace audit timelines using only authenticated Admin API calls; its kill-switch and risk-config actions use the same audited API paths as other Administration Zone clients.
-- [ ] Telegram receives a message for every signal, every risk decision (approved or rejected), every order state change, and every kill-switch transition.
+- [ ] Telegram receives a message only for buy/sell trade actions (position opened/closed), kill-switch transitions, and unreconciled-order alerts — not for every signal, risk decision, or intermediate order state change.
 - [ ] The LLM Analysis Service container has no network route to Binance or Freqtrade and holds no exchange credentials, verified by inspecting the Compose network configuration and container environment.
 - [ ] Killing Redis, Postgres, or the LLM Service mid-cycle results in the documented fail-closed behavior (Section 9.4), not a crash loop or a silent approval.
 - [ ] A 72-hour unattended dry-run run completes with a fully consistent audit trail (no orphaned `SUBMITTED` orders older than the reconciliation window) and no unhandled exceptions in service logs.
