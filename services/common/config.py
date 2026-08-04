@@ -62,11 +62,13 @@ class LLMServiceSettings(BaseSettings):
     # table to describe the repair-prompt retry it would activate.
     max_repair_attempts: int = 0
     # PromptBuilder's optional strategy-regime framing line (llm_service/app/
-    # prompts/builder.py). Off by default so the exact text sent to the LLM
-    # (and therefore its decisions) is unchanged from before this refactor;
-    # the Strategy Selector still runs and its result is still attached to
-    # Signal.raw_response either way.
-    include_strategy_context_in_prompt: bool = False
+    # prompts/builder.py) — advisory only, does not override the rubric.
+    # Enabled 2026-08-04: a 566-trade mechanical backtest
+    # (scripts/backtest/mechanical_replay.py) found no regime whose win rate
+    # clearly beat the others, so this isn't expected to be a big lever, but
+    # giving the model the same regime label the Strategy Selector already
+    # computes is a free, low-risk source of extra context.
+    include_strategy_context_in_prompt: bool = True
 
 
 class RedisSettings(BaseSettings):
@@ -99,6 +101,11 @@ class RiskConfig(BaseSettings):
     # the weakest 3-confirmation BUYs while still admitting anything with
     # either a 4th confirmation or genuine model conviction.
     min_confidence: Decimal = Decimal("0.70")
+    # Position-sizing multiplier applied at exactly `min_confidence`,
+    # scaling linearly up to 1.0 (full size) at confidence 1.0 — added
+    # 2026-08-04 (mục 3) so a signal that barely clears the confidence bar
+    # risks less capital than one the model is fully convinced by.
+    min_confidence_size_scale: Decimal = Decimal("0.5")
     # A 16-symbol CPU-bound 1h cycle is staggered across the hour. Measure
     # from the closed candle's actual close time and leave enough room for
     # the final symbol's bounded inference/queue delay.

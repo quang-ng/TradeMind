@@ -17,12 +17,26 @@ class SizingResult:
     risk_pct_applied: Decimal
 
 
+def _confidence_scale(confidence: Decimal, config: RiskConfig) -> Decimal:
+    """Linearly scales from `min_confidence_size_scale` at `min_confidence`
+    up to `1` at confidence `1.0`, so a signal that barely clears the entry
+    bar gets less capital than one the model is fully convinced by — added
+    2026-08-04 (mục 3): sizing previously ignored confidence entirely once a
+    signal passed `min_confidence`, treating a 0.70 and a 0.95 identically."""
+    confidence_range = Decimal("1") - config.min_confidence
+    if confidence_range <= 0:
+        return Decimal("1")
+    ratio = _clamp((confidence - config.min_confidence) / confidence_range, Decimal("0"), Decimal("1"))
+    return config.min_confidence_size_scale + (Decimal("1") - config.min_confidence_size_scale) * ratio
+
+
 def compute_sizing(
     *,
     equity_usdt: Decimal,
     free_balance_usdt: Decimal,
     entry_price: Decimal,
     atr_14: Decimal,
+    confidence: Decimal,
     config: RiskConfig,
 ) -> SizingResult:
     """PROJECT.md Section 9.2 — fixed-fractional risk sizing using ATR for
@@ -43,7 +57,7 @@ def compute_sizing(
         equity_usdt * config.max_position_pct,
         free_balance_usdt,
     )
-    position_size_usdt = max(position_size_usdt, Decimal("0"))
+    position_size_usdt = max(position_size_usdt, Decimal("0")) * _confidence_scale(confidence, config)
     position_size_base = position_size_usdt / entry_price if entry_price > 0 else Decimal("0")
     stop_loss_price = entry_price * (Decimal("1") - stop_distance_pct)
 

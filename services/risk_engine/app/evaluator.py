@@ -40,6 +40,7 @@ def evaluate(
         free_balance_usdt=account.free_balance_usdt,
         entry_price=signal.price,
         atr_14=signal.atr_14,
+        confidence=signal.confidence,
         config=config,
     )
     ctx = RuleContext(
