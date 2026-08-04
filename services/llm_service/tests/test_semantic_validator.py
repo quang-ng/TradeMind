@@ -181,9 +181,12 @@ def test_suppresses_model_sell_with_fewer_than_three_confirmations():
 
 
 def test_keeps_model_hold_when_documented_bearish_loss_cut_rubric_passes():
-    """Validation gates proposed SELLs but never fabricates one from HOLD."""
+    """Validation gates proposed SELLs but never fabricates one from HOLD —
+    unless the hard loss-cut backstop applies, which this loss (-1%) doesn't:
+    it clears the soft `min_exit_loss_pct` cushion but stays short of the
+    default 1.5% `hard_loss_cut_pct`."""
     result = validate_signal_semantics(
-        _context(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.025),
+        _context(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.01),
         _output(Action.HOLD),
     )
 
@@ -198,6 +201,76 @@ def test_confirms_model_sell_when_loss_cut_rubric_passes():
     )
 
     assert result.output.action == Action.SELL
+    assert result.action_changed is False
+
+
+def test_hard_loss_cut_promotes_model_hold_to_sell_once_breached():
+    """Unlike the confirmation-gated rubric, the hard loss-cut backstop *can*
+    promote a model HOLD into SELL — added after the 2026-08-04 P&L review
+    found losers riding down for days because a grinding decline never
+    produced two cross-category bearish confirmations."""
+    result = validate_signal_semantics(
+        _context(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.02),
+        _output(Action.HOLD),
+        hard_loss_cut_pct=0.015,
+    )
+
+    assert result.output.action == Action.SELL
+    assert result.action_changed is True
+    assert result.output.confidence == 0.80
+    assert "Hard loss-cut" in result.output.reasoning
+
+
+def test_hard_loss_cut_fires_even_with_insufficient_confirmations():
+    """The hard cut is unconditional on confirmation count/category
+    diversity — these indicators only produce two same-category ('momentum')
+    confirmations, which would never satisfy the normal 2-category bar (see
+    `test_suppresses_sell_when_confirmations_share_a_single_category`)."""
+    context = _custom_context(
+        symbol="ETH/USDT",
+        timeframe="1h",
+        candle_close_time="2026-07-17T03:35:00Z",
+        ohlcv=[
+            {"t": "1", "o": 100, "h": 101, "l": 99, "c": 100, "v": 50},
+            {"t": "2", "o": 100, "h": 102, "l": 99, "c": 101, "v": 50},
+            {"t": "3", "o": 101, "h": 103, "l": 100, "c": 102, "v": 50},
+        ],
+        indicators={
+            "rsi_14": 40.0,
+            "ema_50": 95.0,
+            "ema_200": 90.0,
+            "macd": {"macd": -5.0, "signal": -1.0, "histogram": -1.0},
+            "atr_14": 2.0,
+            "volume_sma_20": 200.0,
+        },
+        position_context={"has_open_position": True, "unrealized_pnl_pct": -0.02},
+    )
+
+    result = validate_signal_semantics(context, _output(Action.HOLD), hard_loss_cut_pct=0.015)
+
+    assert result.output.action == Action.SELL
+    assert result.action_changed is True
+
+
+def test_hard_loss_cut_does_not_fire_when_loss_is_short_of_the_threshold():
+    result = validate_signal_semantics(
+        _context(has_open_position=True, bearish=True, unrealized_pnl_pct=-0.01),
+        _output(Action.HOLD),
+        hard_loss_cut_pct=0.015,
+    )
+
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is False
+
+
+def test_hard_loss_cut_does_not_apply_when_no_position_is_open():
+    result = validate_signal_semantics(
+        _context(has_open_position=False, bearish=True),
+        _output(Action.HOLD),
+        hard_loss_cut_pct=0.015,
+    )
+
+    assert result.output.action == Action.HOLD
     assert result.action_changed is False
 
 

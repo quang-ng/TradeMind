@@ -34,10 +34,12 @@ class ResponseValidator:
         *,
         min_exit_profit_pct: float = 0.005,
         min_exit_loss_pct: float = 0.005,
+        hard_loss_cut_pct: float = 0.015,
         max_repair_attempts: int = 0,
     ):
         self._min_exit_profit_pct = min_exit_profit_pct
         self._min_exit_loss_pct = min_exit_loss_pct
+        self._hard_loss_cut_pct = hard_loss_cut_pct
         self._max_repair_attempts = max_repair_attempts
 
     async def validate(
@@ -76,6 +78,7 @@ class ResponseValidator:
             output,
             min_exit_profit_pct=self._min_exit_profit_pct,
             min_exit_loss_pct=self._min_exit_loss_pct,
+            hard_loss_cut_pct=self._hard_loss_cut_pct,
         )
         return ValidationResult(
             is_valid=True,

@@ -56,6 +56,7 @@ def _build_pipeline(provider: Provider, settings: LLMServiceSettings) -> Analysi
         response_validator=ResponseValidator(
             min_exit_profit_pct=settings.min_exit_profit_pct,
             min_exit_loss_pct=settings.min_exit_loss_pct,
+            hard_loss_cut_pct=settings.hard_loss_cut_pct,
             max_repair_attempts=settings.max_repair_attempts,
         ),
         signal_generator=SignalGenerator(),

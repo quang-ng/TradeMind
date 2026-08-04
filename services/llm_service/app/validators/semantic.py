@@ -19,6 +19,7 @@ def validate_signal_semantics(
     *,
     min_exit_profit_pct: float = 0.005,
     min_exit_loss_pct: float = 0.005,
+    hard_loss_cut_pct: float = 0.015,
 ) -> SemanticValidationResult:
     """Enforce the position-aware exit rubric after structural validation.
 
@@ -29,7 +30,10 @@ def validate_signal_semantics(
     deterministic facts. Enforcing them here prevents a small model from
     proposing an action that contradicts the numeric inputs or is impossible
     in the current position state. A model HOLD is never promoted into a
-    trade action by validation.
+    trade action by validation — except by the `hard_loss_cut_pct` emergency
+    backstop below, which can and deliberately does override a HOLD once the
+    loss is severe enough that waiting for the model or for confirmation
+    diversity is no longer acceptable.
 
     The rubric is symmetric: it confirms a model-proposed profit-taking exit once
     `unrealized_pnl_pct` clears `min_exit_profit_pct`, and separately forces
@@ -61,6 +65,31 @@ def validate_signal_semantics(
     confirmations = context.exit_confirmations if has_open_position else ()
     confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
     confirmations_sufficient = len(confirmations) >= 2 and len(confirmed_categories) >= 2
+
+    if has_open_position and pnl is not None and pnl <= -hard_loss_cut_pct:
+        reasoning = (
+            f"Hard loss-cut: unrealized pnl ({pnl:.2%}) breached the "
+            f"-{hard_loss_cut_pct:.2%} emergency threshold — exiting regardless of "
+            "confirmation count rather than waiting for two cross-category bearish "
+            "confirmations that a grinding, non-trending decline may never produce."
+        )
+        normalized = output.model_copy(
+            update={
+                "action": Action.SELL,
+                "confidence": 0.80,
+                "reasoning": reasoning,
+                "key_indicators": list(confirmations),
+                "invalidation_condition": (
+                    f"Unrealized pnl no longer breaches -{hard_loss_cut_pct:.2%}, or "
+                    "the position is closed."
+                ),
+            }
+        )
+        return SemanticValidationResult(
+            output=normalized,
+            action_changed=output.action != Action.SELL,
+            exit_confirmations=confirmations,
+        )
 
     if (
         output.action == Action.SELL

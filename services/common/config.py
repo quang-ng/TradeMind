@@ -40,6 +40,15 @@ class LLMServiceSettings(BaseSettings):
     # stop-loss (PROJECT.md Section 9.2). Kept small but non-zero so it
     # doesn't fire on ordinary noise.
     min_exit_loss_pct: float = 0.005
+    # Emergency backstop (added after the 2026-08-04 P&L review found losers
+    # riding down to -3.6%+ over multiple days because a grinding/choppy
+    # decline never produced two cross-category bearish confirmations): once
+    # unrealized_pnl_pct breaches -hard_loss_cut_pct, the exit rubric forces
+    # SELL unconditionally — no confirmation count required, and unlike
+    # min_exit_loss_pct this can override a model-proposed HOLD, not just
+    # confirm a model-proposed SELL. Set above min_exit_loss_pct so the
+    # confirmation-gated cut still gets first chance on a clean reversal.
+    hard_loss_cut_pct: float = 0.015
     # The bounded timeout remains a fail-closed backstop for unusually slow
     # local inference; the Scheduler staggers normal requests within each
     # thirty-minute candle period, which leaves plenty of room above 180s
