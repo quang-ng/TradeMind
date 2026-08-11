@@ -35,11 +35,22 @@ class ExternalSignalStrategy(IStrategy):
     # position-aware SELL rubric (services/llm_service/app/semantic_validator.py)
     # to catch real reversals instead of ROI closing every trade on noise.
     # The floor never drops below `min_exit_profit_pct` in that module.
+    #
+    # 2026-08-10: the old table (24h+ tier floor 1%) was found to be firing
+    # as the *primary* exit, not a rare backstop — the position-aware rubric
+    # needs two cross-category bearish confirmations, which a slow grinding
+    # market rarely produces, so positions sat in HOLD until ROI's decaying
+    # floor caught whatever profit existed. Pushed the decay tail further
+    # out in time (each tier now roughly halves, out to 96h) so a winner
+    # gets more time for either the trend to keep running or the rubric to
+    # find a real reversal, before the timer settles for a small win.
     minimal_roi = {
         "0": 0.06,
-        "240": 0.025,
-        "720": 0.015,
-        "1440": 0.01,
+        "240": 0.03,
+        "720": 0.02,
+        "1440": 0.015,
+        "2880": 0.01,
+        "5760": 0.005,
     }
     # Conservative static floor — see class docstring. Also the fallback
     # used by custom_stoploss() below whenever the per-trade tag is absent
