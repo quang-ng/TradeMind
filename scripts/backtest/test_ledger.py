@@ -49,7 +49,7 @@ def test_minimal_roi_matches_updated_decay_table():
 
 def test_atr_stop_fires_before_trailing_activates():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
-    # Profit stays under trailing_activation_pct (1%) before the dip through
+    # Profit stays under trailing_activation_pct (2%) before the dip through
     # the ATR stop — must exit at the ATR stop_loss_price, not the old
     # blunt -8% strategy-wide floor.
     candle = _candle(o=100.5, h=100.5, low=96.5, c=100.2)
@@ -65,9 +65,9 @@ def test_trailing_stop_locks_in_more_than_the_atr_floor():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
 
     # Candle 1: runs up to a peak of +2.5% — past trailing_activation_pct
-    # (1%) but under the 0-4h ROI tier's 6% floor, so ROI doesn't preempt
+    # (2%) but under the 0-4h ROI tier's 6% floor, so ROI doesn't preempt
     # this. Low sits at the open (no intra-candle dip), which stays above
-    # this same candle's own trailing level (102.5*0.9925=101.73125), so it
+    # this same candle's own trailing level (102.5*0.985=100.9625), so it
     # doesn't self-trigger either — see the intra-candle ordering note in
     # check_static_exit's docstring.
     up_candle = _candle(o=101.8, h=102.5, low=101.8, c=102.0)
@@ -84,7 +84,7 @@ def test_trailing_stop_locks_in_more_than_the_atr_floor():
 
     assert trade is not None
     assert trade.exit_reason == "trailing_stop"
-    assert trade.exit_price == Decimal("101.0")  # gapped below the 101.73125 trail at open
+    assert trade.exit_price == Decimal("100.9625")  # touched, not gapped through
     assert trade.exit_price > Decimal("97.0")
 
 

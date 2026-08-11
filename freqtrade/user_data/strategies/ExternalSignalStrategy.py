@@ -66,14 +66,26 @@ class ExternalSignalStrategy(IStrategy):
     # TRAILING_DISTANCE_PCT behind the trade's peak price (trade.max_rate),
     # so a run past that point locks in progressively more as it climbs
     # instead of only being bounded by the entry-anchored ATR stop or the
-    # ROI decay table's current time tier. ~1-1.5x a typical 1h-candle ATR
-    # (0.4-0.75% on these pairs, per the minimal_roi comment above) is
-    # tight enough to hold most of a real reversal's giveback without
-    # closing out on ordinary candle noise. Both are starting guesses, not
-    # backtested values — worth validating with
-    # scripts/backtest/mechanical_replay.py before leaning on them hard.
-    trailing_activation_pct = 0.01
-    trailing_distance_pct = 0.0075
+    # ROI decay table's current time tier.
+    #
+    # First shipped as 1%/0.75% — a guess, not backtested. A mechanical
+    # replay (scripts/backtest/mechanical_replay.py, ledger.py mirroring
+    # this file) then found that guess too tight for these pairs' actual
+    # 1h noise (median candle range 0.5-0.98% of price): trailing
+    # activated on ordinary wicks and 43% of its exits were net losses
+    # from price gapping through the trail before the next check.
+    # Re-picked from a 9-combo grid search on 6 months of 1h history
+    # across all 5 pairs: the deciding factor wasn't either number alone
+    # but the *margin* between them (activation - distance) — that margin
+    # predicted the negative-exit rate almost linearly (0.75% margin ->
+    # 21% negative; 0% margin -> 46%; distance > activation -> 63-69%,
+    # since a trail closer than the activation bar can sit below
+    # breakeven for a trade that only just activated). 2%/1.5% (0.5%
+    # margin) had this run's best realized P&L and average trailing-exit
+    # gain of the combinations tested. Re-run the grid before changing
+    # either number again — don't hand-tune just one.
+    trailing_activation_pct = 0.02
+    trailing_distance_pct = 0.015
 
     process_only_new_candles = True
     use_exit_signal = False

@@ -16,7 +16,11 @@ from risk_engine.app.schemas import AccountState, SignalView
 # table (see ExternalSignalStrategy.py's minimal_roi comment) — the old
 # 24h+ floor of 1% was found to be firing as the primary exit rather than
 # a rare backstop. TRAILING_ACTIVATION_PCT/TRAILING_DISTANCE_PCT are new,
-# mirroring custom_stoploss()'s trailing step added the same day.
+# mirroring custom_stoploss()'s trailing step added the same day — see
+# that file's comment for why they're 2%/1.5%, not the first-guess
+# 1%/0.75% (a grid search run through this same module found the *margin*
+# between the two, not either number alone, drives how often the trail
+# gets gapped through for a net loss).
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
     0: Decimal("0.06"),
@@ -26,8 +30,8 @@ MINIMAL_ROI = {
     2880: Decimal("0.01"),
     5760: Decimal("0.005"),
 }
-TRAILING_ACTIVATION_PCT = Decimal("0.01")
-TRAILING_DISTANCE_PCT = Decimal("0.0075")
+TRAILING_ACTIVATION_PCT = Decimal("0.02")
+TRAILING_DISTANCE_PCT = Decimal("0.015")
 
 
 @dataclass
