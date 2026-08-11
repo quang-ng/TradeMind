@@ -8,16 +8,26 @@ from risk_engine.app.exit_evaluator import evaluate_exit
 from risk_engine.app.schemas import AccountState, SignalView
 
 # Mirrors freqtrade/user_data/strategies/ExternalSignalStrategy.py: the
-# static safety net that fires independent of any LLM signal. Kept here
-# instead of imported since the strategy module isn't importable outside a
-# Freqtrade runtime.
+# safety nets that fire independent of any LLM signal. Kept here instead of
+# imported since the strategy module isn't importable outside a Freqtrade
+# runtime — MUST be kept in sync by hand with that file.
+#
+# 2026-08-11: MINIMAL_ROI updated to match the strategy's post-incident
+# table (see ExternalSignalStrategy.py's minimal_roi comment) — the old
+# 24h+ floor of 1% was found to be firing as the primary exit rather than
+# a rare backstop. TRAILING_ACTIVATION_PCT/TRAILING_DISTANCE_PCT are new,
+# mirroring custom_stoploss()'s trailing step added the same day.
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
     0: Decimal("0.06"),
-    240: Decimal("0.025"),
-    720: Decimal("0.015"),
-    1440: Decimal("0.01"),
+    240: Decimal("0.03"),
+    720: Decimal("0.02"),
+    1440: Decimal("0.015"),
+    2880: Decimal("0.01"),
+    5760: Decimal("0.005"),
 }
+TRAILING_ACTIVATION_PCT = Decimal("0.01")
+TRAILING_DISTANCE_PCT = Decimal("0.0075")
 
 
 @dataclass
@@ -27,7 +37,11 @@ class SimPosition:
     entry_price: Decimal
     size_usdt: Decimal
     size_base: Decimal
-    stop_loss_price: Decimal  # risk_engine's ATR stop — audit only, doesn't trigger the exit
+    stop_loss_price: Decimal  # risk_engine's ATR stop — same value custom_stoploss()
+    # applies via the `slpct:` entry tag, so (unlike before 2026-08-11) this now
+    # actually drives check_static_exit below rather than being audit-only.
+    peak_price: Decimal  # trade's high-water mark since entry — mirrors
+    # freqtrade's Trade.max_rate, used for the trailing-stop check below.
 
 
 @dataclass
@@ -133,9 +147,26 @@ class Ledger:
     def check_static_exit(
         self, symbol: str, candle: dict, candle_close_time: datetime
     ) -> ClosedTrade | None:
-        """Freqtrade's own exit mechanism (static stoploss + `minimal_roi`
-        decay table) — fires independent of any LLM signal, so it must be
-        checked every candle a position is open, not just on SELL actions."""
+        """Freqtrade's own exit mechanism (per-trade ATR stop with a
+        trailing step, plus the `minimal_roi` decay table) — fires
+        independent of any LLM signal, so it must be checked every candle a
+        position is open, not just on SELL actions.
+
+        Mirrors `ExternalSignalStrategy.custom_stoploss()` + `minimal_roi`.
+        `position.peak_price` is updated from this candle's high first —
+        matching freqtrade updating `Trade.max_rate` before invoking
+        `custom_stoploss()` for a completed candle — then the stop check
+        uses that same-candle peak, and only after that does the ROI check
+        run against this candle's high.
+
+        The trailing activation gate uses profit-at-peak
+        (`position.peak_price`), not this candle's close: it's rechecked
+        every candle, and a pullback is exactly when close-based profit can
+        dip back under the activation bar even though the trade did reach
+        it — gating on the close would silently drop trailing protection
+        at the moment it's most needed. Mirrors the same peak-vs-current
+        distinction in custom_stoploss().
+        """
         position = self.positions.get(symbol)
         if position is None:
             return None
@@ -144,10 +175,25 @@ class Ledger:
         high = Decimal(str(candle["h"]))
         open_ = Decimal(str(candle["o"]))
 
-        stop_price = position.entry_price * (1 + STATIC_STOPLOSS_PCT)
+        position.peak_price = max(position.peak_price, high)
+        peak_profit_pct = (position.peak_price - position.entry_price) / position.entry_price
+
+        # Defensive floor mirroring custom_stoploss()'s own fallback: never
+        # let the effective stop be looser than the strategy-wide static
+        # bound, even if stop_loss_price were ever wider than expected.
+        stop_price = max(
+            position.stop_loss_price, position.entry_price * (1 + STATIC_STOPLOSS_PCT)
+        )
+        exit_reason = "atr_stoploss"
+        if peak_profit_pct >= TRAILING_ACTIVATION_PCT:
+            trailing_price = position.peak_price * (1 - TRAILING_DISTANCE_PCT)
+            if trailing_price > stop_price:
+                stop_price = trailing_price
+                exit_reason = "trailing_stop"
+
         if low <= stop_price:
             fill = min(open_, stop_price) if open_ < stop_price else stop_price
-            return self._record_close(position, candle_close_time, fill, "static_stoploss")
+            return self._record_close(position, candle_close_time, fill, exit_reason)
 
         elapsed_minutes = (candle_close_time - position.entry_time).total_seconds() / 60
         roi_threshold = next(
@@ -197,6 +243,7 @@ class Ledger:
             size_usdt=result.position_size_usdt,
             size_base=size_base,
             stop_loss_price=result.stop_loss_price,
+            peak_price=fill_price,
         )
         self.positions[symbol] = position
         return result, position
