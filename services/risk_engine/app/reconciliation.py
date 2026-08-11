@@ -182,8 +182,14 @@ async def _reconcile_open_positions(
 async def _reconcile_open_entry(
     session: AsyncSession, order: Order, trade: FreqtradeTrade
 ) -> bool:
-    if trade.open_rate is None or trade.amount is None:
-        await _alert_once(session, order, "entry_fill_fields_missing")
+    if (
+        trade.open_rate is None
+        or trade.amount is None
+        or trade.amount <= 0
+        or trade.has_open_orders is not False
+        or trade.open_fill_date is None
+    ):
+        await _alert_once(session, order, "entry_not_confirmed_filled")
         return False
 
     position = (

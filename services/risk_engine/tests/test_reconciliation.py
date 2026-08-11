@@ -97,7 +97,9 @@ async def test_reconciles_stale_entry_and_opens_position(db_session_factory):
             pair="BTC/USDT",
             is_open=True,
             amount=Decimal("0.01"),
+            has_open_orders=False,
             open_rate=Decimal("60000"),
+            open_fill_date=NOW - timedelta(minutes=19),
             open_date=NOW - timedelta(minutes=19),
         )
     )
@@ -115,6 +117,59 @@ async def test_reconciles_stale_entry_and_opens_position(db_session_factory):
         ).scalar_one()
         assert order.status == OrderStatus.FILLED.value
         assert position.status == PositionStatus.OPEN.value
+
+
+@pytest.mark.parametrize(
+    ("amount", "has_open_orders", "open_fill_date"),
+    [
+        (Decimal("0"), True, None),
+        (Decimal("0.01"), True, None),
+        (Decimal("0.01"), False, None),
+    ],
+)
+async def test_unfilled_entry_never_opens_position(
+    db_session_factory,
+    amount: Decimal,
+    has_open_orders: bool,
+    open_fill_date: datetime | None,
+):
+    order_id = await _seed_order(db_session_factory, trade_id=42)
+    client = FakeFreqtradeClient(
+        FreqtradeTrade(
+            trade_id=42,
+            pair="BTC/USDT",
+            is_open=True,
+            amount=amount,
+            has_open_orders=has_open_orders,
+            open_rate=Decimal("60000"),
+            open_fill_date=open_fill_date,
+            open_date=NOW - timedelta(minutes=19),
+        )
+    )
+
+    async with db_session_factory() as session:
+        count = await reconcile_submitted_orders(
+            session, client, now=NOW, stale_after=timedelta(minutes=10)
+        )
+
+    assert count == 0
+    async with db_session_factory() as session:
+        order = await session.get(Order, order_id)
+        position = (
+            await session.execute(select(Position).where(Position.entry_order_id == order_id))
+        ).scalar_one_or_none()
+        event = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.event_type
+                    == AuditEventType.RECONCILIATION_REQUIRED.value
+                )
+            )
+        ).scalar_one()
+        assert order.status == OrderStatus.SUBMITTED.value
+        assert order.filled_amount is None
+        assert position is None
+        assert event.payload["reason"] == "entry_not_confirmed_filled"
 
 
 async def test_missing_trade_id_creates_only_one_operator_alert(db_session_factory):
