@@ -222,3 +222,12 @@ class NotifierSettings(BaseSettings):
     audit_poll_interval_seconds: float = 3.0
     telegram_poll_interval_seconds: float = 2.0
     daily_pnl_report_hour_utc: int = 0
+    # 2026-08-11: a single day's realized PnL is noisy at this trade
+    # frequency (often 0-2 closed trades/day) and was reported with no
+    # context to judge it against. The daily summary now also rolls up a
+    # trailing-7d window and a since-go-live cumulative window; this is the
+    # cutoff for the latter, so pre-live dry-run positions in the same
+    # `positions` table never leak into a "real money" cumulative number.
+    # Value is the verified dry_run->false flip (audit_events
+    # CONFIG_CHANGED), not the later date it was first noticed live.
+    live_trading_started_at: str = "2026-07-27T14:31:57+00:00"

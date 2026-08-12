@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -117,51 +119,157 @@ async def _poll_audit_events(
         await asyncio.sleep(interval_seconds)
 
 
-async def _send_daily_pnl_summary(
-    session_factory: async_sessionmaker[AsyncSession],
-    telegram: TelegramClient,
-    window_end: datetime,
-) -> None:
-    window_start = window_end - timedelta(days=1)
-    async with session_factory() as session:
-        closed_positions = (
+@dataclass
+class _WindowStats:
+    pnl_usdt: Decimal
+    wins: int
+    losses: int
+
+    @property
+    def trade_count(self) -> int:
+        return self.wins + self.losses
+
+    @property
+    def win_rate_pct(self) -> Decimal | None:
+        return (Decimal(self.wins) / self.trade_count * 100) if self.trade_count else None
+
+
+def _window_stats(positions: Sequence[Position]) -> _WindowStats:
+    pnl = sum((p.pnl_usdt or Decimal("0") for p in positions), start=Decimal("0"))
+    wins = sum(1 for p in positions if (p.pnl_usdt or Decimal("0")) > 0)
+    losses = sum(1 for p in positions if (p.pnl_usdt or Decimal("0")) < 0)
+    return _WindowStats(pnl_usdt=pnl, wins=wins, losses=losses)
+
+
+def _format_rollup_line(label: str, stats: _WindowStats, *, equity_usdt: Decimal | None) -> str:
+    # equity_usdt is the *current* balance, not what it was over this
+    # window, so this is a rough "PnL relative to where the account
+    # stands now" — same approximation admin_api's /status daily_pnl_pct
+    # already makes, not a time-weighted return.
+    pct = f" ({stats.pnl_usdt / equity_usdt:.2%})" if equity_usdt else ""
+    win_rate = f", {stats.win_rate_pct:.0f}% win rate" if stats.win_rate_pct is not None else ""
+    return f"{label}: {stats.pnl_usdt:.4f} USDT{pct} | {stats.trade_count} trades{win_rate}"
+
+
+def _format_trade_line(position: Position) -> str:
+    pct = f" ({position.pnl_pct:.2%})" if position.pnl_pct is not None else ""
+    pnl = position.pnl_usdt if position.pnl_usdt is not None else Decimal("0")
+    return (
+        f"  {position.symbol}: {position.entry_price} -> {position.exit_price}, "
+        f"{pnl:.4f} USDT{pct}"
+    )
+
+
+async def _fetch_status(settings: NotifierSettings) -> dict | None:
+    """Best-effort `GET /status` for equity/open-position context. The
+    summary must still send with just the PnL rollups below if admin_api
+    or the balance snapshot is unavailable (Section 11: equity is never
+    synthesized, so /status legitimately 503s sometimes)."""
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.admin_api_url,
+            headers={"Authorization": f"Bearer {settings.admin_api_key}"},
+            timeout=15.0,
+        ) as client:
+            response = await client.get("/status")
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError:
+        logger.warning("daily_pnl_summary_status_unavailable", exc_info=True)
+        return None
+
+
+async def _closed_positions_since(
+    session: AsyncSession, *, start: datetime, end: datetime
+) -> list[Position]:
+    return list(
+        (
             await session.execute(
                 select(Position).where(
                     Position.status == PositionStatus.CLOSED.value,
-                    Position.closed_at >= window_start,
-                    Position.closed_at < window_end,
+                    Position.closed_at >= start,
+                    Position.closed_at < end,
                 )
             )
-        ).scalars().all()
-
-    total_pnl = sum((p.pnl_usdt or Decimal("0") for p in closed_positions), start=Decimal("0"))
-    wins = sum(1 for p in closed_positions if (p.pnl_usdt or Decimal("0")) > 0)
-    losses = sum(1 for p in closed_positions if (p.pnl_usdt or Decimal("0")) < 0)
-    text = (
-        f"TradeMind | Daily PnL\n"
-        f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)\n"
-        f"Realized PnL: {total_pnl} USDT\n"
-        f"Closed trades: {len(closed_positions)} (wins {wins} / losses {losses})"
+        )
+        .scalars()
+        .all()
     )
-    await telegram.send_message(text)
+
+
+async def _send_daily_pnl_summary(
+    session_factory: async_sessionmaker[AsyncSession],
+    telegram: TelegramClient,
+    settings: NotifierSettings,
+    window_end: datetime,
+) -> None:
+    """A single day's realized PnL is noisy at this trade frequency (often
+    0-2 closed trades/day), so alongside that day's rollup this also sends
+    a trailing-7d and a since-go-live cumulative rollup for context, plus
+    current equity/open-position count when admin_api's balance snapshot
+    is fresh (2026-08-11 — see NotifierSettings.live_trading_started_at)."""
+    window_start = window_end - timedelta(days=1)
+    week_start = window_end - timedelta(days=7)
+    live_start = datetime.fromisoformat(settings.live_trading_started_at)
+
+    async with session_factory() as session:
+        today_positions = await _closed_positions_since(session, start=window_start, end=window_end)
+        week_positions = await _closed_positions_since(session, start=week_start, end=window_end)
+        live_positions = await _closed_positions_since(session, start=live_start, end=window_end)
+
+    status = await _fetch_status(settings)
+    # Decimal("0") is falsy, so _format_rollup_line's `if equity_usdt` below
+    # correctly skips the %-of-equity suffix instead of dividing by zero.
+    equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
+
+    lines = [
+        "TradeMind | Daily PnL",
+        f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
+        "",
+        _format_rollup_line("Today", _window_stats(today_positions), equity_usdt=equity_usdt),
+    ]
+    lines.extend(
+        _format_trade_line(p)
+        for p in sorted(today_positions, key=lambda p: p.closed_at or window_start)
+    )
+    lines += [
+        "",
+        _format_rollup_line("Last 7d", _window_stats(week_positions), equity_usdt=equity_usdt),
+        _format_rollup_line(
+            f"Since live ({live_start.date().isoformat()})",
+            _window_stats(live_positions),
+            equity_usdt=equity_usdt,
+        ),
+    ]
+    if status is not None:
+        killswitch_note = " | KILL SWITCH ON" if status.get("killswitch_enabled") else ""
+        lines += [
+            "",
+            f"Equity: {equity_usdt:.2f} USDT | Open positions: {status['open_positions']}"
+            f"{killswitch_note}",
+        ]
+
+    await telegram.send_message("\n".join(lines))
 
 
 async def _daily_pnl_summary_loop(
     session_factory: async_sessionmaker[AsyncSession],
     telegram: TelegramClient,
-    report_hour_utc: int,
+    settings: NotifierSettings,
 ) -> None:
-    """Sends one realized-PnL rollup per day at `report_hour_utc` (UTC),
-    covering the trailing 24h window rather than the calendar day so it
-    reads correctly no matter which hour is configured."""
+    """Sends one realized-PnL rollup per day at `settings.daily_pnl_report_hour_utc`
+    (UTC), covering the trailing 24h window rather than the calendar day so
+    it reads correctly no matter which hour is configured."""
     while True:
         try:
             now = datetime.now(timezone.utc)
-            next_run = now.replace(hour=report_hour_utc, minute=0, second=0, microsecond=0)
+            next_run = now.replace(
+                hour=settings.daily_pnl_report_hour_utc, minute=0, second=0, microsecond=0
+            )
             if next_run <= now:
                 next_run += timedelta(days=1)
             await asyncio.sleep((next_run - now).total_seconds())
-            await _send_daily_pnl_summary(session_factory, telegram, next_run)
+            await _send_daily_pnl_summary(session_factory, telegram, settings, next_run)
         except Exception:
             logger.exception("daily_pnl_summary_failed")
             await asyncio.sleep(60.0)
@@ -257,7 +365,7 @@ async def run_notifier() -> None:
             _poll_telegram_commands(
                 session_factory, telegram, settings, settings.telegram_poll_interval_seconds
             ),
-            _daily_pnl_summary_loop(session_factory, telegram, settings.daily_pnl_report_hour_utc),
+            _daily_pnl_summary_loop(session_factory, telegram, settings),
         )
     finally:
         await telegram.aclose()
