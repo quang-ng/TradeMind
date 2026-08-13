@@ -89,8 +89,24 @@ def build_context(
     return ContextBuilder().build(request)
 
 
-def mechanical_decision(context, settings: LLMServiceSettings):
-    """Returns (final_action, regime, exit_confirmations)."""
+def mechanical_decision(
+    context,
+    settings: LLMServiceSettings,
+    suppress_buy_regimes: frozenset[str] = frozenset(),
+):
+    """Returns (final_action, regime, exit_confirmations).
+
+    `suppress_buy_regimes` is an experimental knob, not a production code
+    path: it lets a one-off replay test "what if entries were flatly
+    blocked whenever the Strategy Selector's regime label is one of
+    these" (StrategyName values, e.g. `mean_reversion`), independent of
+    whatever the semantic validator's own confirmation-count rubric
+    decides. The Strategy Selector's regime remains fully advisory in
+    every real code path (`validators/semantic.py`); this only affects
+    this script's own BUY outcome, after validation has already run, so
+    the exit rubric and hard-loss-cut logic are exercised identically
+    either way.
+    """
     stub_action = Action.SELL if context.position.has_open_position else Action.BUY
     stub_output = LLMOutput(
         action=stub_action,
@@ -100,6 +116,7 @@ def mechanical_decision(context, settings: LLMServiceSettings):
         invalidation_condition="n/a",
     )
     strategy = StrategySelector().select(context)
+    regime = strategy.strategy.value
     result = validate_signal_semantics(
         context,
         stub_output,
@@ -107,7 +124,10 @@ def mechanical_decision(context, settings: LLMServiceSettings):
         min_exit_loss_pct=settings.min_exit_loss_pct,
         hard_loss_cut_pct=settings.hard_loss_cut_pct,
     )
-    return result.output.action, strategy.strategy.value, result.exit_confirmations
+    action = result.output.action
+    if action == Action.BUY and regime in suppress_buy_regimes:
+        action = Action.HOLD
+    return action, regime, result.exit_confirmations
 
 
 def _reason_text(result) -> str:
@@ -116,6 +136,9 @@ def _reason_text(result) -> str:
 
 async def run(args: argparse.Namespace) -> None:
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    suppress_buy_regimes = frozenset(
+        r.strip() for r in (args.suppress_buy_regimes or "").split(",") if r.strip()
+    )
     scheduler_settings = SchedulerSettings()
     llm_settings = LLMServiceSettings()
     lookback = scheduler_settings.candle_lookback
@@ -206,7 +229,9 @@ async def run(args: argparse.Namespace) -> None:
                 unrealized_pnl_pct=unrealized_pnl_pct,
                 llm_ohlcv_window=llm_ohlcv_window,
             )
-            action, regime, _ = mechanical_decision(context, llm_settings)
+            action, regime, _ = mechanical_decision(
+                context, llm_settings, suppress_buy_regimes
+            )
 
             signal_view = SignalView(
                 id=f"{symbol}-{close_ts}",
@@ -346,6 +371,18 @@ def main() -> None:
         "--compounding",
         action="store_true",
         help="Size off starting_equity + realized P&L instead of a fixed equity",
+    )
+    parser.add_argument(
+        "--suppress-buy-regimes",
+        default=None,
+        help=(
+            "Comma-separated StrategyName values (trend_following, "
+            "trend_pullback, momentum_continuation, mean_reversion). Any BUY "
+            "the rubric would otherwise approve is downgraded to HOLD when "
+            "the Strategy Selector's regime label is in this set — an "
+            "experimental entry filter, not something any production code "
+            "path applies today."
+        ),
     )
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     parser.add_argument("--trades-out", default=None, help="CSV path for the closed-trade log")
