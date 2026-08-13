@@ -16,14 +16,15 @@ class StrategySelector:
     it only labels which of a fixed set of named strategies best describes
     the current `MarketContext`, plus any runner-up regimes and why.
 
-    Deliberately advisory for now: the actual decision rubric enforced by
-    `prompts/v1.py` and `validators/semantic.py` does not yet branch on
-    `strategy`. See the module-level note in `services/pipeline.py` and the
-    migration notes for why — in short, branching the rubric per strategy
-    would change today's trading decisions, which this refactor is
-    explicitly not allowed to do. The classification is still real,
-    deterministic, and unit-tested; wiring a strategy-specific rubric later
-    is a `PromptBuilder`/`validators` change, not an architecture change.
+    Advisory for `prompts/v1.py` (framing context only, never overrides the
+    rules) and for every regime but one in `validators/semantic.py`: since
+    2026-08-13 a `TREND_FOLLOWING` classification suppresses an otherwise-
+    qualifying BUY (walk-forward backtest evidence in that module's
+    docstring). The other three regimes still don't branch the rubric.
+    Wiring more of them in later is a `PromptBuilder`/`validators` change,
+    not an architecture change — the classification itself is already
+    real, deterministic, and unit-tested regardless of how much of the
+    rubric consumes it.
     """
 
     def select(self, context: MarketContext) -> SelectedStrategy:

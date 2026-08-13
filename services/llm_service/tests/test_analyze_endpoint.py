@@ -259,6 +259,12 @@ def test_analyze_routes_through_provider_override_bypassing_the_injected_default
         "ollama_model": "qwen2.5:7b",
         "ollama_temperature": 0.9,
     }
+    # This fixture's ema_50/ema_200 gap (~4.5%) is a TREND_FOLLOWING setup
+    # (semantic.py, 2026-08-13), which would suppress the stub's BUY
+    # regardless of which provider served it — irrelevant to what this test
+    # checks (override plumbing), so narrow the gap under the Strategy
+    # Selector's 1.5% threshold without touching the shared fixture file.
+    request_payload["indicators"]["ema_50"] = 60050.0
     with TestClient(app) as client:
         response = client.post("/analyze", json=request_payload)
 

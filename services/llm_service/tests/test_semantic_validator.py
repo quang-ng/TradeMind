@@ -409,6 +409,45 @@ def test_suppresses_buy_when_numeric_trend_confirmation_is_missing():
 
 
 def test_allows_buy_with_numeric_trend_and_momentum_confirmation():
+    # ema_50/ema_200 gap is 1.0% here — deliberately under the Strategy
+    # Selector's 1.5% trend threshold, so this exercises the confirmation-
+    # count rubric alone. A larger gap would also classify as
+    # `TREND_FOLLOWING` and get suppressed by the regime gate covered in
+    # test_suppresses_buy_when_strategy_selector_classifies_trend_following
+    # below, which uses the same fixture with ema_50 raised to 102.0.
+    context = _custom_context(
+        symbol="ETH/USDT",
+        timeframe="1h",
+        candle_close_time="2026-07-17T03:35:00Z",
+        ohlcv=[
+            {"t": "1", "o": 100, "h": 102, "l": 99, "c": 101, "v": 80},
+            {"t": "2", "o": 101, "h": 103, "l": 100, "c": 102, "v": 90},
+            {"t": "3", "o": 102, "h": 105, "l": 101, "c": 104, "v": 150},
+        ],
+        indicators={
+            "rsi_14": 56.0,
+            "ema_50": 101.0,
+            "ema_200": 100.0,
+            "macd": {"macd": 2.0, "signal": 1.0, "histogram": 1.0},
+            "atr_14": 2.0,
+            "volume_sma_20": 100.0,
+        },
+        position_context={"has_open_position": False},
+    )
+
+    result = validate_signal_semantics(context, _output(Action.BUY))
+
+    assert result.output.action == Action.BUY
+    assert result.action_changed is False
+
+
+def test_suppresses_buy_when_strategy_selector_classifies_trend_following():
+    # Same fixture as test_allows_buy_with_numeric_trend_and_momentum_confirmation
+    # above, except ema_50 is raised to 102.0: a 2.0% ema_50/ema_200 gap,
+    # past the Strategy Selector's 1.5% trend threshold, with price aligned
+    # above both — a TREND_FOLLOWING classification. The confirmation count
+    # is identical and would otherwise pass (see the other test), isolating
+    # the regime gate as the reason BUY is suppressed here.
     context = _custom_context(
         symbol="ETH/USDT",
         timeframe="1h",
@@ -431,5 +470,6 @@ def test_allows_buy_with_numeric_trend_and_momentum_confirmation():
 
     result = validate_signal_semantics(context, _output(Action.BUY))
 
-    assert result.output.action == Action.BUY
-    assert result.action_changed is False
+    assert result.output.action == Action.HOLD
+    assert result.action_changed is True
+    assert "trend_following" in result.output.reasoning

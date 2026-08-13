@@ -13,10 +13,11 @@ class StrategyName(str, Enum):
 
 
 class SelectedStrategy(BaseModel):
-    """Deterministic regime classification for one `MarketContext`. Purely
-    advisory metadata today (see `strategies/selector.py`'s module
-    docstring for why it does not yet branch the decision rubric) —
-    attached to the final `TradingSignal.raw_response` and, when
+    """Deterministic regime classification for one `MarketContext`. Advisory
+    metadata for the prompt and for every regime but `TREND_FOLLOWING` (see
+    `strategies/selector.py`'s module docstring for how much of the rubric
+    each regime actually branches) — attached to the final
+    `TradingSignal.raw_response` and, when
     `LLMServiceSettings.include_strategy_context_in_prompt` is enabled,
     surfaced to the model as framing context."""
 

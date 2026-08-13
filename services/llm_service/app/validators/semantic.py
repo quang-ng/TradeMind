@@ -4,6 +4,8 @@ from common.enums import Action
 
 from ..models.llm import LLMOutput
 from ..models.market import MarketContext
+from ..models.strategy import StrategyName
+from ..strategies.selector import StrategySelector
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,23 @@ def validate_signal_semantics(
     below both EMAs and EMA50 below EMA200 tend to move together), so a
     same-category pair is materially weaker evidence than a cross-category
     one.
+
+    2026-08-13: the BUY branch also suppresses entry when the Strategy
+    Selector (`strategies/selector.py`) classifies the setup as
+    `TREND_FOLLOWING` — an EMA50/EMA200 gap already past its 1.5% trend
+    threshold, price aligned with it. That combination means the trend is
+    already extended by the time the numeric confirmation bar is met, i.e.
+    a late/chasing entry, not a fresh one. This is no longer purely
+    advisory metadata for exactly this one case (see the Strategy
+    Selector's own docstring); every other regime remains advisory only.
+    A `scripts/backtest/mechanical_replay.py --suppress-buy-regimes
+    trend_following` walk-forward check (discovery half Feb-May 2026, held-
+    out half May-Aug 2026, plus fresh Aug 5-13 2026 data) found this
+    regime's trades the worst performer of the four in every window and the
+    filter cut realized loss/max-drawdown by ~35-40% out-of-sample; the
+    win-rate effect was smaller and less consistent (flat in the discovery
+    half, +1.5pp held-out), so treat this as a loss-reduction lever more
+    than a win-rate one.
     """
     position = context.position
     has_open_position = position.has_open_position
@@ -161,18 +180,38 @@ def validate_signal_semantics(
             and "trend" in entry_categories
             and "momentum" in entry_categories
         )
-        if entry_is_sufficient:
+        regime = StrategySelector().select(context).strategy
+        if entry_is_sufficient and regime != StrategyName.TREND_FOLLOWING:
             return SemanticValidationResult(
                 output=output,
                 action_changed=False,
                 exit_confirmations=confirmations,
             )
-        reason = (
-            "BUY suppressed because deterministic indicator validation found "
-            f"{len(entry_confirmations)} confirmation(s) "
-            f"({', '.join(entry_confirmations) or 'none'}); entry requires at least "
-            "three numeric confirmations including both trend and momentum."
-        )
+        if entry_is_sufficient:
+            # Confirmations passed, but the Strategy Selector's regime is
+            # the one case where that's not enough on its own — see the
+            # module docstring's 2026-08-13 note.
+            normalization_invalidation = (
+                "At least three numeric entry confirmations including both trend "
+                "and momentum while no position is open, and the Strategy "
+                "Selector no longer classifies the setup as trend_following."
+            )
+            reason = (
+                "BUY suppressed because the Strategy Selector classified this "
+                "entry as trend_following — the EMA50/EMA200 gap is already past "
+                "its trend threshold with price aligned, so the trend is already "
+                "extended rather than fresh. Backtest evidence: "
+                "scripts/backtest/mechanical_replay.py's walk-forward check found "
+                "this regime the worst performer of the four and cut realized "
+                "loss/drawdown ~35-40% out-of-sample when suppressed."
+            )
+        else:
+            reason = (
+                "BUY suppressed because deterministic indicator validation found "
+                f"{len(entry_confirmations)} confirmation(s) "
+                f"({', '.join(entry_confirmations) or 'none'}); entry requires at least "
+                "three numeric confirmations including both trend and momentum."
+            )
     elif not has_open_position:
         reason = "SELL suppressed because there is no open position."
     elif pnl is None:
