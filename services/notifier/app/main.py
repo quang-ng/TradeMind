@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from html import escape
 
 import httpx
 from common.config import DatabaseSettings, NotifierSettings
@@ -276,6 +277,219 @@ async def _daily_pnl_summary_loop(
             await asyncio.sleep(60.0)
 
 
+def _describe_window(stats: _WindowStats, *, equity_usdt: Decimal | None) -> str:
+    """Verbose, email-appropriate rendering of a `_WindowStats` window —
+    deliberately more explicit than `_format_rollup_line` (kept as-is for
+    the terse Telegram daily summary): spells out the win/loss split and
+    what the %-of-equity figure actually means, since an email is read
+    stand-alone rather than as one line in a running chat feed."""
+    pct = (
+        f" — that's {stats.pnl_usdt / equity_usdt:+.2%} of the current account equity"
+        if equity_usdt
+        else ""
+    )
+    if stats.trade_count == 0:
+        return f"{stats.pnl_usdt:.4f} USDT (no trades closed in this window)"
+    win_rate = f"{stats.win_rate_pct:.0f}%" if stats.win_rate_pct is not None else "—"
+    trades_word = "trade" if stats.trade_count == 1 else "trades"
+    wins_word = "win" if stats.wins == 1 else "wins"
+    losses_word = "loss" if stats.losses == 1 else "losses"
+    return (
+        f"{stats.pnl_usdt:.4f} USDT from {stats.trade_count} closed {trades_word} "
+        f"({stats.wins} {wins_word}, {stats.losses} {losses_word}, {win_rate} win rate){pct}"
+    )
+
+
+def _pnl_color(pnl: Decimal) -> str:
+    if pnl > 0:
+        return "#059669"
+    if pnl < 0:
+        return "#dc2626"
+    return "#4b5563"
+
+
+def _pnl_tint(pnl: Decimal) -> tuple[str, str]:
+    """(background, border) pair matching `_pnl_color`, for the HTML stat cards."""
+    if pnl > 0:
+        return "#ecfdf5", "#a7f3d0"
+    if pnl < 0:
+        return "#fef2f2", "#fecaca"
+    return "#f3f4f6", "#e5e7eb"
+
+
+def _pnl_arrow(pnl: Decimal) -> str:
+    if pnl > 0:
+        return "▲"  # ▲
+    if pnl < 0:
+        return "▼"  # ▼
+    return "–"  # –
+
+
+def _html_stat_card(
+    title: str,
+    subtitle: str,
+    stats: _WindowStats,
+    *,
+    equity_usdt: Decimal | None,
+    large: bool,
+) -> str:
+    """One stat tile (This week / Previous week / Since live). `subtitle`
+    spells out in plain English what the window actually covers — the
+    thing a Telegram line has no room for but an email does."""
+    color = _pnl_color(stats.pnl_usdt)
+    bg, border = _pnl_tint(stats.pnl_usdt)
+    arrow = _pnl_arrow(stats.pnl_usdt)
+    pct = (
+        f"&nbsp;&nbsp;&middot;&nbsp;&nbsp;{stats.pnl_usdt / equity_usdt:+.2%} of current equity"
+        if equity_usdt
+        else ""
+    )
+    if stats.trade_count == 0:
+        detail = "No trades closed in this window."
+    else:
+        win_rate = f"{stats.win_rate_pct:.0f}%" if stats.win_rate_pct is not None else "&mdash;"
+        detail = (
+            f"{stats.trade_count} trade{'s' if stats.trade_count != 1 else ''} closed "
+            f"&mdash; {stats.wins}W / {stats.losses}L ({win_rate} win rate)"
+        )
+    number_size = "26px" if large else "19px"
+    padding = "18px 20px" if large else "14px 16px"
+    return f"""<div style="background:{bg};border:1px solid {border};border-radius:10px;padding:{padding};">
+<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;">{escape(title)}</div>
+<div style="font-size:11px;color:#9ca3af;margin-top:2px;">{escape(subtitle)}</div>
+<div style="font-size:{number_size};font-weight:700;color:{color};font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;margin-top:8px;">{arrow}&nbsp;{stats.pnl_usdt:.4f} USDT</div>
+<div style="font-size:12px;color:#6b7280;margin-top:4px;">{detail}{pct}</div>
+</div>"""
+
+
+def _html_trade_row(p: Position) -> str:
+    pnl = p.pnl_usdt if p.pnl_usdt is not None else Decimal("0")
+    color = _pnl_color(pnl)
+    pct = f"{p.pnl_pct:+.2%}" if p.pnl_pct is not None else "&mdash;"
+    entry = p.entry_price if p.entry_price is not None else "&mdash;"
+    exit_price = p.exit_price if p.exit_price is not None else "&mdash;"
+    cell = "padding:10px 12px;border-bottom:1px solid #f0f1f3;font-size:13px;"
+    return f"""<tr>
+<td style="{cell}color:#111827;font-weight:600;">{escape(p.symbol)}</td>
+<td style="{cell}color:#6b7280;font-family:'SFMono-Regular',Consolas,monospace;font-size:12px;white-space:nowrap;">{entry}&nbsp;&rarr;&nbsp;{exit_price}</td>
+<td style="{cell}color:{color};font-weight:600;text-align:right;font-family:'SFMono-Regular',Consolas,monospace;">{pnl:.4f}</td>
+<td style="{cell}color:{color};text-align:right;font-family:'SFMono-Regular',Consolas,monospace;">{pct}</td>
+</tr>"""
+
+
+def _render_weekly_html(
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    week_stats: _WindowStats,
+    week_positions: Sequence[Position],
+    prev_week_stats: _WindowStats,
+    live_stats: _WindowStats,
+    live_start: datetime,
+    equity_usdt: Decimal | None,
+    status: dict | None,
+) -> str:
+    """Email-only HTML rendering of the same weekly rollup as the plain-text
+    body. Inline CSS + `<table>` layout, no external stylesheet or JS, so it
+    renders consistently across email clients — that constraint is why this
+    can't reuse the web/artifact CSS conventions used elsewhere in the repo.
+    Every dynamic *string* (trading-pair symbols) is HTML-escaped; every
+    other interpolated value is our own Decimal/int/date, never raw text."""
+    if week_positions:
+        rows = "".join(
+            _html_trade_row(p)
+            for p in sorted(week_positions, key=lambda p: p.closed_at or window_start)
+        )
+        head_cell = (
+            "padding:0 12px 8px;font-size:11px;font-weight:600;text-transform:uppercase;"
+            "letter-spacing:.03em;color:#9ca3af;border-bottom:1px solid #e5e7eb;"
+        )
+        trades_section = f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:10px;">
+<thead><tr>
+<th align="left" style="{head_cell}">Pair</th>
+<th align="left" style="{head_cell}">Entry &rarr; exit price</th>
+<th align="right" style="{head_cell}">P&amp;L (USDT)</th>
+<th align="right" style="{head_cell}">P&amp;L (%)</th>
+</tr></thead>
+<tbody>{rows}</tbody>
+</table>"""
+    else:
+        trades_section = (
+            '<p style="font-size:13px;color:#9ca3af;margin:10px 0 0;">'
+            "No trades closed this week.</p>"
+        )
+
+    killswitch_row = ""
+    if status is not None and status.get("killswitch_enabled"):
+        killswitch_row = """<tr><td style="padding:16px 28px 0;">
+<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;font-size:13px;color:#991b1b;font-weight:600;">
+&#9888;&nbsp; Kill switch is currently ON &mdash; no new trades will be opened until it is turned off.
+</div>
+</td></tr>"""
+
+    account_row = ""
+    if equity_usdt is not None and status is not None:
+        account_row = f"""<tr><td style="padding:20px 28px 0;">
+<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;margin-bottom:8px;">Account snapshot (right now)</div>
+<div style="font-size:13px;color:#374151;line-height:1.7;">
+Current equity: <strong>{equity_usdt:.2f} USDT</strong><br>
+Open positions: <strong>{status["open_positions"]}</strong>
+</div>
+</td></tr>"""
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>TradeMind Weekly Summary</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 12px;">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+<tr><td style="padding:24px 28px 0;">
+<div style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#4f46e5;">TradeMind</div>
+<div style="font-size:19px;font-weight:700;color:#111827;margin-top:4px;">Weekly Performance Summary</div>
+<div style="font-size:13px;color:#6b7280;margin-top:2px;">{window_start.date().isoformat()} &rarr; {window_end.date().isoformat()} (UTC)</div>
+</td></tr>
+<tr><td style="padding:16px 28px 0;">
+<div style="font-size:12px;color:#9ca3af;line-height:1.6;border-top:1px solid #f0f1f3;padding-top:14px;">
+All figures below are <strong>realized</strong> profit/loss &mdash; from trades that already closed
+in each window. Unrealized P&amp;L on positions still open is not included.
+</div>
+</td></tr>
+<tr><td style="padding:16px 28px 0;">
+{_html_stat_card("This week", "Realized P&L, last 7 days", week_stats, equity_usdt=equity_usdt, large=True)}
+</td></tr>
+<tr><td style="padding:14px 28px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+<td width="50%" style="padding-right:6px;">
+{_html_stat_card("Previous week", "The 7 days before that", prev_week_stats, equity_usdt=equity_usdt, large=False)}
+</td>
+<td width="50%" style="padding-left:6px;">
+{_html_stat_card("Since live", f"Cumulative since {live_start.date().isoformat()}", live_stats, equity_usdt=equity_usdt, large=False)}
+</td>
+</tr></table>
+</td></tr>
+<tr><td style="padding:20px 28px 0;">
+<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;">Trades closed this week</div>
+{trades_section}
+</td></tr>
+{killswitch_row}
+{account_row}
+<tr><td style="padding:20px 28px;">
+<div style="font-size:11px;color:#9ca3af;border-top:1px solid #f0f1f3;padding-top:14px;">Automated weekly report from TradeMind's notifier service.</div>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+
 async def _send_weekly_pnl_summary(
     session_factory: async_sessionmaker[AsyncSession],
     email: EmailClient,
@@ -287,7 +501,12 @@ async def _send_weekly_pnl_summary(
     the 7d before that for a week-over-week trend, plus the same
     since-go-live cumulative context the daily summary already computes —
     same rationale: a single week's realized PnL still isn't much signal at
-    this trade frequency without something to compare it against."""
+    this trade frequency without something to compare it against.
+
+    Unlike the terse Telegram daily summary, this is read stand-alone in an
+    inbox, so both the plain-text body and the HTML alternative spell out
+    what each number means (win/loss counts, %-of-equity, which window is
+    which) instead of packing it into one compact line."""
     window_start = window_end - timedelta(days=7)
     prev_window_start = window_start - timedelta(days=7)
     live_start = datetime.fromisoformat(settings.live_trading_started_at)
@@ -299,14 +518,21 @@ async def _send_weekly_pnl_summary(
         )
         live_positions = await _closed_positions_since(session, start=live_start, end=window_end)
 
+    week_stats = _window_stats(week_positions)
+    prev_week_stats = _window_stats(prev_week_positions)
+    live_stats = _window_stats(live_positions)
+
     status = await _fetch_status(settings)
     equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
 
     lines = [
-        "TradeMind | Weekly Performance Summary",
+        "TradeMind - Weekly Performance Summary",
         f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
         "",
-        _format_rollup_line("This week", _window_stats(week_positions), equity_usdt=equity_usdt),
+        "All figures below are realized profit/loss from trades that closed in each",
+        "window below - unrealized P&L on positions still open is not included.",
+        "",
+        f"This week (last 7 days): {_describe_window(week_stats, equity_usdt=equity_usdt)}",
     ]
     lines.extend(
         _format_trade_line(p)
@@ -314,28 +540,41 @@ async def _send_weekly_pnl_summary(
     )
     lines += [
         "",
-        _format_rollup_line(
-            "Previous week", _window_stats(prev_week_positions), equity_usdt=equity_usdt
-        ),
-        _format_rollup_line(
-            f"Since live ({live_start.date().isoformat()})",
-            _window_stats(live_positions),
-            equity_usdt=equity_usdt,
-        ),
+        "Previous week (the 7 days before that): "
+        f"{_describe_window(prev_week_stats, equity_usdt=equity_usdt)}",
+        f"Since live trading began ({live_start.date().isoformat()}): "
+        f"{_describe_window(live_stats, equity_usdt=equity_usdt)}",
     ]
     if status is not None:
-        killswitch_note = " | KILL SWITCH ON" if status.get("killswitch_enabled") else ""
         lines += [
             "",
-            f"Equity: {equity_usdt:.2f} USDT | Open positions: {status['open_positions']}"
-            f"{killswitch_note}",
+            f"Current equity: {equity_usdt:.2f} USDT",
+            f"Open positions right now: {status['open_positions']}",
         ]
+        if status.get("killswitch_enabled"):
+            lines += [
+                "",
+                "WARNING: Kill switch is currently ON - no new trades will be opened "
+                "until it is turned off.",
+            ]
+
+    html_body = _render_weekly_html(
+        window_start=window_start,
+        window_end=window_end,
+        week_stats=week_stats,
+        week_positions=week_positions,
+        prev_week_stats=prev_week_stats,
+        live_stats=live_stats,
+        live_start=live_start,
+        equity_usdt=equity_usdt,
+        status=status,
+    )
 
     subject = (
         f"TradeMind Weekly Summary - {window_start.date().isoformat()} "
         f"to {window_end.date().isoformat()}"
     )
-    await email.send_email(subject, "\n".join(lines))
+    await email.send_email(subject, "\n".join(lines), html_body)
 
 
 def _next_weekly_run(now: datetime, *, weekday: int, hour: int) -> datetime:

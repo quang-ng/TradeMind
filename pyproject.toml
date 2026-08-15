@@ -45,3 +45,10 @@ select = ["E", "F", "I"]
 # break inside the string would embed a literal newline the model could
 # imitate, producing invalid JSON (see git history for the incident).
 "services/llm_service/app/prompts/v1.py" = ["E501"]
+# Inline-CSS HTML email template (services/notifier/app/main.py's
+# _render_weekly_html and helpers) - one element per physical line reads
+# far better than wrapping mid `style="..."` attribute, and unlike the
+# JSON case above, HTML collapses insignificant whitespace so a wrapped
+# line would be harmless anyway; this is a readability call, not a
+# correctness one.
+"services/notifier/app/main.py" = ["E501"]

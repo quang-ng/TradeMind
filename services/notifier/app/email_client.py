@@ -15,9 +15,11 @@ class EmailClient:
     weekly rollup is low-frequency enough to belong in an inbox instead,
     read on its own schedule rather than mixed into the trade-alert feed.
 
-    Plain text only, same rationale as `TelegramClient`: keeps the two
-    notification paths consistent and avoids an HTML-email dependency for
-    a once-a-week message.
+    `text_body` is always sent and is what non-HTML clients (and Gmail's
+    "show original"/reply-quote view) fall back to; `html_body` is an
+    optional richer alternative built entirely from our own numeric/date
+    fields (never raw LLM `reasoning`, unlike why Telegram stays plain
+    text) — see `_render_weekly_html` in `main.py`.
 
     `smtplib` is blocking, so the actual send runs in a thread
     (`asyncio.to_thread`) to avoid stalling the notifier's event loop —
@@ -28,12 +30,16 @@ class EmailClient:
     def __init__(self, settings: NotifierSettings | None = None) -> None:
         self._settings = settings or NotifierSettings()
 
-    def _send_sync(self, subject: str, body: str) -> None:
+    def _send_sync(self, subject: str, text_body: str, html_body: str | None) -> None:
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self._settings.email_from or self._settings.smtp_username
         message["To"] = self._settings.email_to
-        message.set_content(body)
+        message.set_content(text_body)
+        if html_body:
+            # Produces a multipart/alternative message; mail clients pick
+            # whichever part they can render best, preferring HTML.
+            message.add_alternative(html_body, subtype="html")
 
         with smtplib.SMTP(self._settings.smtp_host, self._settings.smtp_port, timeout=15.0) as smtp:
             smtp.starttls()
@@ -41,7 +47,7 @@ class EmailClient:
                 smtp.login(self._settings.smtp_username, self._settings.smtp_password)
             smtp.send_message(message)
 
-    async def send_email(self, subject: str, body: str) -> bool:
+    async def send_email(self, subject: str, text_body: str, html_body: str | None = None) -> bool:
         if not self._settings.smtp_host or not self._settings.email_to:
             # Same "never blocks or delays" posture as Telegram (PROJECT.md
             # Section 9.4): an unconfigured mailer is a no-op, not a crash,
@@ -51,7 +57,7 @@ class EmailClient:
             logger.warning("email_not_configured", extra={"subject": subject})
             return False
         try:
-            await asyncio.to_thread(self._send_sync, subject, body)
+            await asyncio.to_thread(self._send_sync, subject, text_body, html_body)
             return True
         except (smtplib.SMTPException, OSError) as exc:
             logger.warning("email_send_failed", extra={"error": str(exc), "subject": subject})

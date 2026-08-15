@@ -6,6 +6,7 @@ from common.config import NotifierSettings
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
 from notifier.app.main import (
+    _describe_window,
     _fetch_status,
     _format_rollup_line,
     _format_trade_line,
@@ -103,6 +104,26 @@ def test_next_weekly_run_same_day_after_hour_rolls_to_next_week():
     assert next_run == datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
 
 
+def test_describe_window_spells_out_wins_losses_and_pct_of_equity():
+    stats = _WindowStats(pnl_usdt=Decimal("-0.22"), wins=0, losses=1)
+    text = _describe_window(stats, equity_usdt=Decimal("114.78"))
+    assert text == (
+        "-0.2200 USDT from 1 closed trade (0 wins, 1 loss, 0% win rate)"
+        " — that's -0.19% of the current account equity"
+    )
+
+
+def test_describe_window_singular_trade_word_and_no_equity():
+    stats = _WindowStats(pnl_usdt=Decimal("3.0"), wins=1, losses=0)
+    text = _describe_window(stats, equity_usdt=None)
+    assert text == "3.0000 USDT from 1 closed trade (1 win, 0 losses, 100% win rate)"
+
+
+def test_describe_window_empty_window():
+    text = _describe_window(_WindowStats(Decimal("0"), 0, 0), equity_usdt=Decimal("100"))
+    assert text == "0.0000 USDT (no trades closed in this window)"
+
+
 # --- integration: real Postgres, faked Telegram + admin_api /status -----
 
 
@@ -179,10 +200,10 @@ class _FakeTelegram:
 
 class _FakeEmail:
     def __init__(self) -> None:
-        self.sent: list[tuple[str, str]] = []
+        self.sent: list[tuple[str, str, str | None]] = []
 
-    async def send_email(self, subject: str, body: str) -> bool:
-        self.sent.append((subject, body))
+    async def send_email(self, subject: str, text_body: str, html_body: str | None = None) -> bool:
+        self.sent.append((subject, text_body, html_body))
         return True
 
 
@@ -316,16 +337,34 @@ async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separa
     await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
 
     assert len(email.sent) == 1
-    subject, text = email.sent[0]
+    subject, text, html = email.sent[0]
     assert "TradeMind Weekly Summary" in subject
-    assert "This week: -0.2200 USDT" in text
+
+    # Plain-text body: verbose, self-explanatory per-window descriptions.
+    assert (
+        "This week (last 7 days): -0.2200 USDT from 1 closed trade "
+        "(0 wins, 1 loss, 0% win rate)" in text
+    )
+    assert "-0.19% of the current account equity" in text
     assert "SOL/USDT: 100" in text
     assert "ETH/USDT" not in text.split("Previous week")[0]  # not in the this-week section
-    assert "Previous week: 3.0000 USDT" in text
-    assert "Since live (" in text
-    assert "3.7800 USDT" in text  # -0.22 + 3.0 + 1.0, XRP's 999 excluded
+    assert (
+        "Previous week (the 7 days before that): 3.0000 USDT from 1 closed trade "
+        "(1 win, 0 losses, 100% win rate)" in text
+    )
+    assert "Since live trading began (" in text
+    # -0.22 + 3.0 + 1.0 = 3.78, XRP's 999 excluded (pre-live).
+    assert "3.7800 USDT from 3 closed trades (2 wins, 1 loss, 67% win rate)" in text
     assert "999" not in text
-    assert "Equity: 114.78 USDT | Open positions: 2" in text
+    assert "Current equity: 114.78 USDT" in text
+    assert "Open positions right now: 2" in text
+
+    # HTML alternative: same underlying numbers, rendered as stat cards.
+    assert html is not None
+    assert "SOL/USDT" in html
+    assert "2W / 1L" in html  # since-live tile: 2 wins, 1 loss
+    assert "114.78" in html
+    assert "999" not in html
 
 
 async def test_weekly_summary_still_sends_when_status_unavailable(db_session_factory, monkeypatch):
@@ -338,9 +377,11 @@ async def test_weekly_summary_still_sends_when_status_unavailable(db_session_fac
     await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
 
     assert len(email.sent) == 1
-    _subject, text = email.sent[0]
-    assert "This week: 0.0000 USDT | 0 trades" in text
-    assert "Equity:" not in text
+    _subject, text, html = email.sent[0]
+    assert "This week (last 7 days): 0.0000 USDT (no trades closed in this window)" in text
+    assert "Current equity:" not in text
+    assert html is not None
+    assert "Account snapshot" not in html
 
 
 async def _none_status():
