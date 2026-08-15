@@ -50,7 +50,10 @@ from llm_service.app.context.builder import ContextBuilder  # noqa: E402
 from llm_service.app.models.llm import LLMOutput  # noqa: E402
 from llm_service.app.models.wire import AnalyzeRequest  # noqa: E402
 from llm_service.app.strategies.selector import StrategySelector  # noqa: E402
-from llm_service.app.validators.semantic import validate_signal_semantics  # noqa: E402
+from llm_service.app.validators.semantic import (  # noqa: E402
+    _CONFIRMATION_CATEGORIES,
+    validate_signal_semantics,
+)
 from replay import decision_indices, iso, max_drawdown_pct, parse_date  # noqa: E402
 from risk_engine.app.schemas import SignalView  # noqa: E402
 from scheduler.app.indicators import compute_indicators  # noqa: E402
@@ -196,6 +199,12 @@ async def run(args: argparse.Namespace) -> None:
             ["timestamp", "symbol", "action", "regime", "outcome", "reason"]
         )
 
+    # (symbol, entry_time_iso) -> exit_confirmations tuple present on the
+    # decision candle whose SELL closed that trade — "" (empty) for trades
+    # closed by a static exit (atr_stoploss/trailing_stop/minimal_roi),
+    # which never consult the confirmation rubric at all.
+    trade_exit_confirmations: dict[tuple[str, str], tuple[str, ...]] = {}
+
     processed = 0
     for close_ts, group_iter in groupby(events, key=lambda e: e[0]):
         group = list(group_iter)
@@ -230,7 +239,7 @@ async def run(args: argparse.Namespace) -> None:
                 unrealized_pnl_pct=unrealized_pnl_pct,
                 llm_ohlcv_window=llm_ohlcv_window,
             )
-            action, regime, _ = mechanical_decision(
+            action, regime, exit_confirmations = mechanical_decision(
                 context, llm_settings, suppress_buy_regimes
             )
 
@@ -264,6 +273,7 @@ async def run(args: argparse.Namespace) -> None:
                 reason = "" if trade else _reason_text(result)
                 if trade:
                     trade_regimes[(symbol, entry_time_iso)] = entry_regimes.pop(symbol, "unknown")
+                    trade_exit_confirmations[(symbol, entry_time_iso)] = exit_confirmations
 
             if signals_writer:
                 signals_writer.writerow(
@@ -285,10 +295,14 @@ async def run(args: argparse.Namespace) -> None:
             writer = csv.writer(f)
             writer.writerow(
                 ["symbol", "entry_time", "exit_time", "entry_price", "exit_price",
-                 "size_usdt", "pnl_usdt", "pnl_pct", "exit_reason", "entry_regime"]
+                 "size_usdt", "pnl_usdt", "pnl_pct", "exit_reason", "entry_regime",
+                 "exit_confirmations", "exit_confirmation_categories"]
             )
             for t in ledger.closed_trades:
-                regime = trade_regimes.get((t.symbol, t.entry_time.isoformat()), "unknown")
+                key = (t.symbol, t.entry_time.isoformat())
+                regime = trade_regimes.get(key, "unknown")
+                confirmations = trade_exit_confirmations.get(key, ())
+                categories = sorted({_CONFIRMATION_CATEGORIES[c] for c in confirmations})
                 writer.writerow(
                     [
                         t.symbol, t.entry_time.isoformat(), t.exit_time.isoformat(),
@@ -296,6 +310,7 @@ async def run(args: argparse.Namespace) -> None:
                         t.pnl_usdt.quantize(Decimal("0.01")),
                         t.pnl_pct.quantize(Decimal("0.0001")),
                         t.exit_reason, regime,
+                        "|".join(confirmations), "|".join(categories),
                     ]
                 )
 
