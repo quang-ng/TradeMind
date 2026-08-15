@@ -75,6 +75,18 @@ class Ledger:
     fee_pct: Decimal = Decimal("0.001")
     slippage_pct: Decimal = Decimal("0.0")
     compounding: bool = False
+    # When True, a tripped killswitch is still recorded (killswitch_tripped
+    # stays True for reporting — see print_summary) but no longer blocks
+    # entries. Real production requires a human `/killswitch_off` to resume
+    # after CONSECUTIVE_LOSS_PAUSE/DAILY_LOSS_LIMIT_HIT (no auto-reset
+    # exists), and this replay has no operator to simulate that — without
+    # this flag, one bad stretch permanently freezes every remaining
+    # decision candle for the rest of the run, which silently turns a
+    # multi-month edge question into a test of however many hours preceded
+    # the first trip. Use this to isolate the entry/exit rubric's own edge
+    # from that operational circuit breaker; the real system still has the
+    # breaker; this flag only removes it from the replay's arithmetic.
+    ignore_killswitch: bool = False
 
     positions: dict[str, SimPosition] = field(default_factory=dict)
     closed_trades: list[ClosedTrade] = field(default_factory=list)
@@ -228,11 +240,22 @@ class Ledger:
             account=self.account_state(now),
             config=config,
             now=now,
-            killswitch_enabled=self.killswitch_tripped,
+            killswitch_enabled=self.killswitch_tripped and not self.ignore_killswitch,
             is_duplicate_decision=False,
         )
         if result.auto_trip_killswitch:
             self.killswitch_tripped = True
+            if self.ignore_killswitch:
+                # consecutive_losses.py's rejection is independent of the
+                # killswitch_enabled flag above — it re-derives its own
+                # violation straight from self.consecutive_losses every
+                # candle, and that counter only resets on a winning close,
+                # which can never happen once entries are blocked. Left
+                # alone this self-perpetuates (permanent freeze) regardless
+                # of the flag. Reset it here too, so ignoring the killswitch
+                # actually means what it says instead of only defusing the
+                # kill_switch.py rule while consecutive_losses keeps gating.
+                self.consecutive_losses = 0
         if not result.approved:
             return result, None
 

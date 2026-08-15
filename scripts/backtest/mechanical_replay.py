@@ -178,6 +178,7 @@ async def run(args: argparse.Namespace) -> None:
         fee_pct=Decimal(args.fee_pct),
         slippage_pct=Decimal(args.slippage_pct),
         compounding=args.compounding,
+        ignore_killswitch=args.ignore_killswitch,
     )
     risk_config = RiskConfig()
     entry_regimes: dict[str, str] = {}
@@ -382,6 +383,19 @@ def main() -> None:
             "the Strategy Selector's regime label is in this set — an "
             "experimental entry filter, not something any production code "
             "path applies today."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-killswitch",
+        action="store_true",
+        help=(
+            "Don't let a tripped killswitch block further entries for the "
+            "rest of the run. Real production requires a human /killswitch_off "
+            "to resume after CONSECUTIVE_LOSS_PAUSE/DAILY_LOSS_LIMIT_HIT — no "
+            "auto-reset exists — and this replay has no operator to simulate "
+            "that, so without this flag one bad stretch permanently freezes "
+            "every remaining decision candle. killswitch_tripped is still "
+            "reported in the summary; this only stops it from gating entries."
         ),
     )
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
