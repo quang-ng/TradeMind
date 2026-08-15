@@ -231,3 +231,23 @@ class NotifierSettings(BaseSettings):
     # Value is the verified dry_run->false flip (audit_events
     # CONFIG_CHANGED), not the later date it was first noticed live.
     live_trading_started_at: str = "2026-07-27T14:31:57+00:00"
+
+    # 2026-08-15: weekly business-performance summary, sent by email rather
+    # than Telegram — Telegram is deliberately kept to buy/sell + safety
+    # alerts only (see _NOTIFY_EVENT_TYPES in notifier/app/main.py), and a
+    # once-a-week rollup belongs in an inbox, not the same feed as trade
+    # alerts. SMTP creds are blank by default, matching how
+    # TELEGRAM_BOT_TOKEN ships blank — EmailClient treats "not configured"
+    # as a no-op, never an error.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    # Falls back to smtp_username in EmailClient when left blank — most SMTP
+    # providers (Gmail included) require the From address to match the
+    # authenticated account anyway.
+    email_from: str = ""
+    email_to: str = ""
+    # weekday 0=Monday .. 6=Sunday (Python's `date.weekday()` convention).
+    weekly_pnl_report_weekday_utc: int = 0
+    weekly_pnl_report_hour_utc: int = 8

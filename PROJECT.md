@@ -140,7 +140,7 @@ graph TB
 | **Redis** | Low-latency coordination: pending-signal queue, per-cycle locks, idempotency keys, cached latest state, kill-switch flag cache | Ephemeral/coordination state only (Section 10.2) | Be the system of record — anything in Redis that matters for audit must also land in PostgreSQL |
 | **FastAPI Admin API** | Human-facing read/observe/control surface | HTTP interface, auth, kill-switch endpoint, config read/patch, Freqtrade webhook ingestion | Place trades directly; expose exchange credentials |
 | **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
-| **Telegram Notifier** | Push real-time notifications for signals, decisions, orders, and kill-switch events | Outbound Telegram messages only | Be a control channel for anything beyond a documented kill-switch command (Section 11) |
+| **Telegram Notifier** | Push real-time notifications for signals, decisions, orders, and kill-switch events; also emails a weekly business-performance summary | Outbound Telegram messages, plus the weekly summary email | Be a control channel for anything beyond a documented kill-switch command (Section 11) |
 
 ---
 
@@ -342,6 +342,8 @@ trademind/
 | `BALANCE_REFRESH_INTERVAL_SECONDS` | risk_engine | Refresh cadence for the short-lived Admin balance snapshot (default 30s; risk evaluation always performs its own fresh call) |
 | `SIGNAL_MAX_AGE_MINUTES` | risk_engine | Maximum age of a signal measured from candle close (default 65 minutes for the staggered 1-hour cycle) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | notifier | Outbound notifications |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `EMAIL_FROM` / `EMAIL_TO` | notifier | Weekly business-performance summary email (blank `SMTP_HOST`/`EMAIL_TO` = disabled, no-op) |
+| `WEEKLY_PNL_REPORT_WEEKDAY_UTC` / `WEEKLY_PNL_REPORT_HOUR_UTC` | notifier | UTC weekday/hour the weekly summary email is sent at (default Monday 08:00) |
 | `ADMIN_API_KEY` | admin_api | Auth for the admin API |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine | Internal-network-only Freqtrade REST credentials |
 | `DRY_RUN` | freqtrade, risk_engine | Must be `true` for MVP; flipping requires human review (Section 14) |

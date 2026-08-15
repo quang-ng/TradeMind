@@ -322,6 +322,14 @@ services:
       ADMIN_API_URL: ${ADMIN_API_URL:-http://admin_api:8000}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       DAILY_PNL_REPORT_HOUR_UTC: ${DAILY_PNL_REPORT_HOUR_UTC:-0}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+      WEEKLY_PNL_REPORT_WEEKDAY_UTC: ${WEEKLY_PNL_REPORT_WEEKDAY_UTC:-0}
+      WEEKLY_PNL_REPORT_HOUR_UTC: ${WEEKLY_PNL_REPORT_HOUR_UTC:-8}
     depends_on:
       migrate:
         condition: service_completed_successfully

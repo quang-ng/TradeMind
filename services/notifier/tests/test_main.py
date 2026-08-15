@@ -9,7 +9,9 @@ from notifier.app.main import (
     _fetch_status,
     _format_rollup_line,
     _format_trade_line,
+    _next_weekly_run,
     _send_daily_pnl_summary,
+    _send_weekly_pnl_summary,
     _window_stats,
     _WindowStats,
 )
@@ -77,6 +79,28 @@ def test_format_trade_line():
     assert (
         _format_trade_line(position) == "  SOL/USDT: 73.68 -> 72.95, -0.2200 USDT (-0.99%)"
     )
+
+
+def test_next_weekly_run_advances_to_next_matching_weekday():
+    # Wednesday 2026-08-12 -> next Monday (weekday 0) 08:00 UTC.
+    now = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    next_run = _next_weekly_run(now, weekday=0, hour=8)
+    assert next_run == datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc)
+
+
+def test_next_weekly_run_same_day_before_hour_runs_today():
+    # Monday 2026-08-17, 06:00 UTC, target Monday 08:00 -> still today.
+    now = datetime(2026, 8, 17, 6, 0, tzinfo=timezone.utc)
+    next_run = _next_weekly_run(now, weekday=0, hour=8)
+    assert next_run == datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc)
+
+
+def test_next_weekly_run_same_day_after_hour_rolls_to_next_week():
+    # Monday 2026-08-17, 09:00 UTC, target Monday 08:00 already passed
+    # today -> next Monday, not today.
+    now = datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc)
+    next_run = _next_weekly_run(now, weekday=0, hour=8)
+    assert next_run == datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
 
 
 # --- integration: real Postgres, faked Telegram + admin_api /status -----
@@ -150,6 +174,15 @@ class _FakeTelegram:
 
     async def send_message(self, text: str) -> bool:
         self.sent.append(text)
+        return True
+
+
+class _FakeEmail:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def send_email(self, subject: str, body: str) -> bool:
+        self.sent.append((subject, body))
         return True
 
 
@@ -230,6 +263,83 @@ async def test_daily_summary_still_sends_when_status_unavailable(db_session_fact
     assert len(telegram.sent) == 1
     text = telegram.sent[0]
     assert "Today: 0.0000 USDT | 0 trades" in text
+    assert "Equity:" not in text
+
+
+async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separately(
+    db_session_factory, monkeypatch
+):
+    live_start = NOW - timedelta(days=60)
+    async with db_session_factory() as session:
+        # This week (trailing 7d): one loss.
+        await _make_closed_position(
+            session,
+            symbol="SOL/USDT",
+            pnl_usdt=Decimal("-0.22"),
+            pnl_pct=Decimal("-0.0099"),
+            closed_at=NOW - timedelta(days=2),
+        )
+        # Previous week (7-14d ago), still since live: one win.
+        await _make_closed_position(
+            session,
+            symbol="ETH/USDT",
+            pnl_usdt=Decimal("3.0"),
+            pnl_pct=Decimal("0.01"),
+            closed_at=NOW - timedelta(days=10),
+        )
+        # Since live but outside both weekly windows: one win.
+        await _make_closed_position(
+            session,
+            symbol="BTC/USDT",
+            pnl_usdt=Decimal("1.0"),
+            pnl_pct=Decimal("0.005"),
+            closed_at=NOW - timedelta(days=40),
+        )
+        # Before go-live — must be excluded from every rollup, not just
+        # "since live", since this table can hold pre-live dry-run rows.
+        await _make_closed_position(
+            session,
+            symbol="XRP/USDT",
+            pnl_usdt=Decimal("999"),
+            pnl_pct=Decimal("1.0"),
+            closed_at=live_start - timedelta(days=1),
+        )
+        await session.commit()
+
+    email = _FakeEmail()
+    settings = NotifierSettings(live_trading_started_at=live_start.isoformat())
+    monkeypatch.setattr(
+        "notifier.app.main._fetch_status",
+        lambda _settings: _fake_status(),
+    )
+
+    await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
+
+    assert len(email.sent) == 1
+    subject, text = email.sent[0]
+    assert "TradeMind Weekly Summary" in subject
+    assert "This week: -0.2200 USDT" in text
+    assert "SOL/USDT: 100" in text
+    assert "ETH/USDT" not in text.split("Previous week")[0]  # not in the this-week section
+    assert "Previous week: 3.0000 USDT" in text
+    assert "Since live (" in text
+    assert "3.7800 USDT" in text  # -0.22 + 3.0 + 1.0, XRP's 999 excluded
+    assert "999" not in text
+    assert "Equity: 114.78 USDT | Open positions: 2" in text
+
+
+async def test_weekly_summary_still_sends_when_status_unavailable(db_session_factory, monkeypatch):
+    email = _FakeEmail()
+    settings = NotifierSettings(live_trading_started_at=(NOW - timedelta(days=7)).isoformat())
+    monkeypatch.setattr(
+        "notifier.app.main._fetch_status", lambda _settings: _none_status()
+    )
+
+    await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
+
+    assert len(email.sent) == 1
+    _subject, text = email.sent[0]
+    assert "This week: 0.0000 USDT | 0 trades" in text
     assert "Equity:" not in text
 
 

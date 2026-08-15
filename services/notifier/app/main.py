@@ -14,6 +14,7 @@ from common.logging import configure_json_logging
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from .email_client import EmailClient
 from .telegram_client import TelegramClient
 
 configure_json_logging()
@@ -275,6 +276,106 @@ async def _daily_pnl_summary_loop(
             await asyncio.sleep(60.0)
 
 
+async def _send_weekly_pnl_summary(
+    session_factory: async_sessionmaker[AsyncSession],
+    email: EmailClient,
+    settings: NotifierSettings,
+    window_end: datetime,
+) -> None:
+    """Weekly companion to `_send_daily_pnl_summary`, sent by email instead
+    of Telegram. Rolls up the trailing 7d (the week just finished) against
+    the 7d before that for a week-over-week trend, plus the same
+    since-go-live cumulative context the daily summary already computes —
+    same rationale: a single week's realized PnL still isn't much signal at
+    this trade frequency without something to compare it against."""
+    window_start = window_end - timedelta(days=7)
+    prev_window_start = window_start - timedelta(days=7)
+    live_start = datetime.fromisoformat(settings.live_trading_started_at)
+
+    async with session_factory() as session:
+        week_positions = await _closed_positions_since(session, start=window_start, end=window_end)
+        prev_week_positions = await _closed_positions_since(
+            session, start=prev_window_start, end=window_start
+        )
+        live_positions = await _closed_positions_since(session, start=live_start, end=window_end)
+
+    status = await _fetch_status(settings)
+    equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
+
+    lines = [
+        "TradeMind | Weekly Performance Summary",
+        f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
+        "",
+        _format_rollup_line("This week", _window_stats(week_positions), equity_usdt=equity_usdt),
+    ]
+    lines.extend(
+        _format_trade_line(p)
+        for p in sorted(week_positions, key=lambda p: p.closed_at or window_start)
+    )
+    lines += [
+        "",
+        _format_rollup_line(
+            "Previous week", _window_stats(prev_week_positions), equity_usdt=equity_usdt
+        ),
+        _format_rollup_line(
+            f"Since live ({live_start.date().isoformat()})",
+            _window_stats(live_positions),
+            equity_usdt=equity_usdt,
+        ),
+    ]
+    if status is not None:
+        killswitch_note = " | KILL SWITCH ON" if status.get("killswitch_enabled") else ""
+        lines += [
+            "",
+            f"Equity: {equity_usdt:.2f} USDT | Open positions: {status['open_positions']}"
+            f"{killswitch_note}",
+        ]
+
+    subject = (
+        f"TradeMind Weekly Summary - {window_start.date().isoformat()} "
+        f"to {window_end.date().isoformat()}"
+    )
+    await email.send_email(subject, "\n".join(lines))
+
+
+def _next_weekly_run(now: datetime, *, weekday: int, hour: int) -> datetime:
+    """Next UTC instant matching `weekday` (0=Monday..6=Sunday, `date.weekday()`
+    convention) and `hour`, strictly after `now`. Pure so the weekday-rollover
+    math (today-is-the-day-but-already-past-the-hour, etc.) is unit-testable
+    without driving a real `asyncio.sleep`."""
+    next_run = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    days_ahead = (weekday - next_run.weekday()) % 7
+    next_run += timedelta(days=days_ahead)
+    if next_run <= now:
+        next_run += timedelta(days=7)
+    return next_run
+
+
+async def _weekly_pnl_summary_loop(
+    session_factory: async_sessionmaker[AsyncSession],
+    email: EmailClient,
+    settings: NotifierSettings,
+) -> None:
+    """Sends one weekly performance email per week, at
+    `settings.weekly_pnl_report_weekday_utc`/`weekly_pnl_report_hour_utc`
+    (UTC) — defaults to Monday 08:00 UTC. Same sleep-until-next-run pattern
+    as `_daily_pnl_summary_loop`, via `_next_weekly_run` for the weekday
+    math."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            next_run = _next_weekly_run(
+                now,
+                weekday=settings.weekly_pnl_report_weekday_utc,
+                hour=settings.weekly_pnl_report_hour_utc,
+            )
+            await asyncio.sleep((next_run - now).total_seconds())
+            await _send_weekly_pnl_summary(session_factory, email, settings, next_run)
+        except Exception:
+            logger.exception("weekly_pnl_summary_failed")
+            await asyncio.sleep(60.0)
+
+
 async def _handle_telegram_update(
     update: dict,
     telegram: TelegramClient,
@@ -357,6 +458,7 @@ async def run_notifier() -> None:
     engine = create_async_engine(DatabaseSettings().postgres_dsn)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     telegram = TelegramClient(settings)
+    email = EmailClient(settings)
 
     logger.info("notifier_started")
     try:
@@ -366,6 +468,7 @@ async def run_notifier() -> None:
                 session_factory, telegram, settings, settings.telegram_poll_interval_seconds
             ),
             _daily_pnl_summary_loop(session_factory, telegram, settings),
+            _weekly_pnl_summary_loop(session_factory, email, settings),
         )
     finally:
         await telegram.aclose()
