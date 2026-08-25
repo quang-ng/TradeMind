@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from ..models.llm import LLMRequest, LLMResponse
 from .providers.base import Provider
@@ -30,7 +31,21 @@ class LLMClient:
         (PROJECT.md Section 8.3's failure-mode table). A successful-but-
         malformed response is not retried here — that is the Response
         Validator's job, with no retry by default (Section 8.3: "no retry —
-        treat as a prompt/model problem, not a transient one")."""
+        treat as a prompt/model problem, not a transient one").
+
+        The retry only fires when at least half the budget is still
+        unspent. On a CPU-bound local model a failed attempt has usually
+        already burned most of `timeout_seconds` (2026-08-25 review: 10
+        days of production data showed 0 `provider_error` results, i.e.
+        every observed failure was already a slow-inference timeout, never
+        a fast transport error) — retrying blind in that situation just
+        replays the same multi-minute call with no time left for it to
+        finish, guaranteeing the outer timeout fires and wasting the
+        compute both attempts spent. Skipping the retry when the budget is
+        mostly gone turns that into a clean, immediate `provider_error`
+        instead, and leaves the next scheduled symbol's call from queueing
+        behind a doomed second attempt on a single-slot Ollama server."""
+        start = time.monotonic()
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 try:
@@ -39,6 +54,9 @@ class LLMClient:
                     )
                     return LLMResponse(raw_text=text, failure_reason=None)
                 except Exception:
+                    remaining = self._timeout_seconds - (time.monotonic() - start)
+                    if remaining < self._timeout_seconds / 2:
+                        return LLMResponse(raw_text=None, failure_reason="provider_error")
                     await asyncio.sleep(1.0)
                     try:
                         text = await self._provider.generate(
