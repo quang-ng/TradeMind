@@ -9,9 +9,9 @@ import pandas as pd
 import redis.asyncio as redis
 from common import redis_keys
 from common.config import RedisSettings, SchedulerSettings
-from common.db.models import Position, Signal
+from common.db.models import AuditEvent, Position, Signal
 from common.db.session import get_session_factory
-from common.enums import Action, PositionStatus, SignalStatus
+from common.enums import Action, AuditEventType, PositionStatus, SignalStatus
 from common.llm_config_store import EffectiveLLMConfig, load_effective_llm_config
 from common.sentiment import MarketIndicatorSnapshot, MarketSentiment
 from sqlalchemy import select
@@ -165,9 +165,35 @@ async def _run_locked_cycle(
             price=Decimal(str(latest["c"])),
             atr_14=Decimal(str(indicators["atr_14"])),
             status=SignalStatus.PENDING.value,
+            # Positive-expectancy plan M2 (D3): promoted first-class from the
+            # /analyze response, not re-derived here.
+            trade_score=llm_result.get("trade_score"),
+            score_breakdown=llm_result.get("score_breakdown"),
+            setup_regime=llm_result.get("setup_regime"),
+            volatility_regime=llm_result.get("volatility_regime"),
         )
         session.add(signal_row)
         await session.flush()
+        # Positive-expectancy plan M2/Section 5: `SIGNAL_RECEIVED` is defined
+        # in `AuditEventType` but was never actually written anywhere before
+        # this — "what the signal *was*", audited once regardless of
+        # outcome, distinct from `RISK_APPROVED`/`RISK_REJECTED`'s "what the
+        # Risk Engine *decided*".
+        session.add(
+            AuditEvent(
+                trace_id=trace_id,
+                event_type=AuditEventType.SIGNAL_RECEIVED.value,
+                payload={
+                    "signal_id": str(signal_row.id),
+                    "symbol": symbol,
+                    "action": llm_result["action"],
+                    "confidence": llm_result["confidence"],
+                    "trade_score": llm_result.get("trade_score"),
+                    "setup_regime": llm_result.get("setup_regime"),
+                    "volatility_regime": llm_result.get("volatility_regime"),
+                },
+            )
+        )
         await redis_client.xadd(
             redis_keys.SIGNALS_PENDING_STREAM, {"signal_id": str(signal_row.id)}
         )

@@ -1,10 +1,12 @@
 import hmac
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from common.config import WebhookSettings
-from common.db.models import AuditEvent, Order, Position
+from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
 from common.enums import AuditEventType, OrderSide, OrderStatus, PositionStatus
+from common.risk_config_store import load_effective_risk_config
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,12 +112,19 @@ async def _handle_entry_fill(session: AsyncSession, payload: FreqtradeWebhookPay
     order.avg_price = payload.open_rate
     await session.flush()
 
+    entry_signal = await _load_entry_signal(session, order)
+
     position = Position(
         symbol=payload.pair,
         status=PositionStatus.OPEN.value,
         entry_order_id=order.id,
         entry_price=payload.open_rate,
         amount=payload.amount,
+        # Positive-expectancy plan M2 — denormalized from the entry Signal
+        # (same precedent as entry_price/amount, Section 3 M2). `None` when
+        # no linked Signal is found (e.g. legacy order predating M2).
+        market_regime=entry_signal.setup_regime if entry_signal is not None else None,
+        trade_score=entry_signal.trade_score if entry_signal is not None else None,
     )
     opened_at = _parse_freqtrade_datetime(payload.open_date)
     if opened_at is not None:
@@ -141,6 +150,46 @@ async def _handle_entry_fill(session: AsyncSession, payload: FreqtradeWebhookPay
             },
         )
     )
+
+
+async def _load_entry_signal(session: AsyncSession, entry_order: Order) -> Signal | None:
+    """`entry_order.risk_decision_id -> RiskDecision.signal_id -> Signal`
+    (positive-expectancy plan M2) — the same linkage `_load_actual_risk_usdt`
+    below walks for R, reused here to denormalize `setup_regime`/
+    `trade_score` onto the new `Position` row at open."""
+    risk_decision = await session.get(RiskDecision, entry_order.risk_decision_id)
+    if risk_decision is None:
+        return None
+    return await session.get(Signal, risk_decision.signal_id)
+
+
+async def _load_actual_risk_usdt(session: AsyncSession, position: Position) -> Decimal | None:
+    """The R-multiple denominator (positive-expectancy plan D1) — looked up
+    via the entry order's linked `RiskDecision`, not recomputed here.
+    `actual_risk_usdt` already captures the exact post-clamp sizing math
+    that produced this trade (`risk_engine/app/sizing.py`). `None` for
+    legacy positions whose entry decision predates this column."""
+    entry_order = await session.get(Order, position.entry_order_id)
+    if entry_order is None:
+        return None
+    risk_decision = await session.get(RiskDecision, entry_order.risk_decision_id)
+    if risk_decision is None:
+        return None
+    return risk_decision.actual_risk_usdt
+
+
+async def _estimate_fees_usdt(
+    session: AsyncSession, position: Position, payload: FreqtradeWebhookPayload
+) -> Decimal | None:
+    """Round-trip fee estimate (entry notional + exit notional, both at
+    `RiskConfig.estimated_fee_pct`) — the only fee figure available today,
+    since the Freqtrade webhook payload carries no real per-trade fee."""
+    if payload.close_rate is None or payload.amount is None:
+        return None
+    config = await load_effective_risk_config(session)
+    entry_notional = position.entry_price * position.amount
+    exit_notional = payload.close_rate * payload.amount
+    return config.estimated_fee_pct * (entry_notional + exit_notional)
 
 
 async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayload) -> None:
@@ -215,12 +264,27 @@ async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayl
         )
         return
 
+    actual_risk_usdt = await _load_actual_risk_usdt(session, position)
+    r_multiple = (
+        payload.profit_amount / actual_risk_usdt
+        if actual_risk_usdt and payload.profit_amount is not None
+        else None
+    )
+    fees_usdt = await _estimate_fees_usdt(session, position, payload)
+
     position.status = PositionStatus.CLOSED
     position.exit_order_id = order.id
     position.exit_price = payload.close_rate
     position.pnl_usdt = payload.profit_amount
     position.pnl_pct = payload.profit_ratio
     position.closed_at = _parse_freqtrade_datetime(payload.close_date) or datetime.now(timezone.utc)
+    position.exit_reason = payload.exit_reason
+    position.r_multiple = r_multiple
+    position.fees_usdt = fees_usdt
+    # Positive-expectancy plan M1: the Freqtrade webhook payload carries no
+    # real per-trade fee figure today (Section 1 gap analysis), so this is
+    # always a config-estimated value until a genuine source is exposed.
+    position.fees_estimated = True
 
     session.add(
         AuditEvent(
@@ -246,6 +310,9 @@ async def _handle_exit_fill(session: AsyncSession, payload: FreqtradeWebhookPayl
                 "pnl_usdt": pnl_usdt,
                 "source": "freqtrade_webhook",
                 "exit_reason": payload.exit_reason,
+                "r_multiple": str(r_multiple) if r_multiple is not None else None,
+                "fees_usdt": str(fees_usdt) if fees_usdt is not None else None,
+                "fees_estimated": True,
             },
         )
     )

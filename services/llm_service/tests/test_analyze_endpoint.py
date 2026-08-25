@@ -85,6 +85,17 @@ def test_analyze_returns_schema_valid_signal_for_both_pairs(fixture_name):
     assert body["reasoning"]
     assert len(body["reasoning"]) <= 500
     assert body["status"] == "PENDING"
+    # Positive-expectancy plan D3/M2: computed every cycle, regardless of
+    # the eventual action.
+    assert 0 <= body["trade_score"] <= 100
+    assert set(body["score_breakdown"]) == {
+        "trend", "momentum", "volume", "regime", "risk_reward", "volatility",
+        "assumed_reward_pct", "assumed_reward_multiple",
+    }
+    assert body["setup_regime"] in {
+        "trend_following", "trend_pullback", "momentum_continuation", "mean_reversion",
+    }
+    assert body["volatility_regime"] in {"HIGH_VOLATILITY", "NORMAL", "LOW_VOLATILITY"}
 
 
 @pytest.mark.parametrize(
@@ -163,6 +174,11 @@ def test_analyze_falls_back_to_hold_on_timeout():
     body = response.json()
     assert body["action"] == "HOLD"
     assert body["reasoning"] == "llm_timeout"
+    # Journal fields are computed before the LLM call, so even this
+    # early-return failure path carries them (positive-expectancy plan M2).
+    assert body["trade_score"] is not None
+    assert body["setup_regime"] is not None
+    assert body["volatility_regime"] is not None
 
 
 def test_analyze_never_promotes_model_hold_to_sell_for_bearish_exit():

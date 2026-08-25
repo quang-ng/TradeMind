@@ -164,12 +164,23 @@ async def _handle_entry_signal(
         position_size_usdt=result.position_size_usdt,
         position_size_base=result.position_size_base,
         stop_loss_price=result.stop_loss_price,
+        stop_distance_pct=result.stop_distance_pct,
         equity_snapshot_usdt=result.equity_snapshot_usdt,
         risk_pct_applied=result.risk_pct_applied,
+        nominal_risk_amount_usdt=result.nominal_risk_amount_usdt,
+        actual_risk_usdt=result.actual_risk_usdt,
     )
     session.add(decision)
     await session.flush()
-    await _write_decision_audit_event(session, signal_row, result.approved, result.rejection_reason)
+    await _write_decision_audit_event(
+        session,
+        signal_row,
+        result.approved,
+        result.rejection_reason,
+        nominal_risk_amount_usdt=result.nominal_risk_amount_usdt,
+        actual_risk_usdt=result.actual_risk_usdt,
+        stop_distance_pct=result.stop_distance_pct,
+    )
 
     if result.approved:
         assert result.position_size_usdt is not None and result.position_size_base is not None
@@ -251,17 +262,36 @@ async def _write_decision_audit_event(
     signal_row: Signal,
     approved: bool,
     rejection_reason: RejectionReason | None,
+    *,
+    nominal_risk_amount_usdt: Decimal | None = None,
+    actual_risk_usdt: Decimal | None = None,
+    stop_distance_pct: Decimal | None = None,
 ) -> None:
     event_type = AuditEventType.RISK_APPROVED if approved else AuditEventType.RISK_REJECTED
+    payload = {
+        "signal_id": str(signal_row.id),
+        "approved": approved,
+        "rejection_reason": rejection_reason.value if rejection_reason else None,
+    }
+    # Positive-expectancy plan M1: the sizing math that produced an approved
+    # decision is audit-visible from day one, not just persisted on the row —
+    # SELL/exit decisions (exit_evaluator.py has no sizing candidate) leave
+    # these None, matching the nullable RiskDecision columns.
+    if approved:
+        payload["nominal_risk_amount_usdt"] = (
+            str(nominal_risk_amount_usdt) if nominal_risk_amount_usdt is not None else None
+        )
+        payload["actual_risk_usdt"] = (
+            str(actual_risk_usdt) if actual_risk_usdt is not None else None
+        )
+        payload["stop_distance_pct"] = (
+            str(stop_distance_pct) if stop_distance_pct is not None else None
+        )
     session.add(
         AuditEvent(
             trace_id=signal_row.trace_id,
             event_type=event_type.value,
-            payload={
-                "signal_id": str(signal_row.id),
-                "approved": approved,
-                "rejection_reason": rejection_reason.value if rejection_reason else None,
-            },
+            payload=payload,
         )
     )
 

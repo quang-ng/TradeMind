@@ -4,8 +4,10 @@ from ..context.builder import ContextBuilder
 from ..llm.client import LLMClient
 from ..models.wire import AnalyzeRequest, TradingSignal
 from ..prompts.builder import PromptBuilder
+from ..scoring.trade_score import TradeScorer
 from ..signals.generator import SignalGenerator
 from ..strategies.selector import StrategySelector
+from ..strategies.volatility_classifier import VolatilityClassifier
 from ..validators.response_validator import ResponseValidator
 
 logger = logging.getLogger(__name__)
@@ -14,14 +16,20 @@ logger = logging.getLogger(__name__)
 class AnalysisPipeline:
     """Composes one `/analyze` call end to end:
 
-        Context Builder -> Strategy Selector -> Prompt Builder ->
-        LLM Client -> Response Validator -> Signal Generator
+        Context Builder -> Strategy Selector -> Volatility Classifier ->
+        Trade Scorer -> Prompt Builder -> LLM Client -> Response Validator ->
+        Signal Generator
 
     matching the Scheduler -> ... -> Risk Engine flow in PROJECT.md Section
     8. Every dependency is injected (see `main.py`'s `_build_pipeline`), so
     each stage stays independently unit-testable and this class has no
     logic of its own beyond wiring + the two audit-trail log events that
     used to live inline in `main.py`.
+
+    Strategy/volatility/score are computed once, before the LLM call, from
+    `context` alone (positive-expectancy plan D3/M2) — so every returned
+    `TradingSignal`, including the HOLD/failure early-return paths below,
+    carries the same journal metadata a successful BUY/SELL would.
     """
 
     def __init__(
@@ -29,6 +37,8 @@ class AnalysisPipeline:
         *,
         context_builder: ContextBuilder,
         strategy_selector: StrategySelector,
+        volatility_classifier: VolatilityClassifier,
+        trade_scorer: TradeScorer,
         prompt_builder: PromptBuilder,
         llm_client: LLMClient,
         response_validator: ResponseValidator,
@@ -36,6 +46,8 @@ class AnalysisPipeline:
     ):
         self._context_builder = context_builder
         self._strategy_selector = strategy_selector
+        self._volatility_classifier = volatility_classifier
+        self._trade_scorer = trade_scorer
         self._prompt_builder = prompt_builder
         self._llm_client = llm_client
         self._response_validator = response_validator
@@ -45,6 +57,8 @@ class AnalysisPipeline:
         model_name = self._llm_client.model_name
         context = self._context_builder.build(request)
         strategy = self._strategy_selector.select(context)
+        volatility_regime = self._volatility_classifier.classify(context)
+        score = self._trade_scorer.score(context, strategy, volatility_regime)
 
         llm_request = self._prompt_builder.build(context, strategy)
         llm_response = await self._llm_client.generate(llm_request)
@@ -59,6 +73,8 @@ class AnalysisPipeline:
                 reason=llm_response.failure_reason,
                 model_name=model_name,
                 strategy=strategy,
+                volatility_regime=volatility_regime,
+                score=score,
             )
 
         async def _repair(bad_text: str, reason: str) -> str | None:
@@ -81,6 +97,8 @@ class AnalysisPipeline:
                 model_name=model_name,
                 strategy=strategy,
                 raw_response={"raw": validation.final_raw_text},
+                volatility_regime=volatility_regime,
+                score=score,
             )
 
         raw_response = {
@@ -105,4 +123,6 @@ class AnalysisPipeline:
             model_name=model_name,
             strategy=strategy,
             raw_response=raw_response,
+            volatility_regime=volatility_regime,
+            score=score,
         )

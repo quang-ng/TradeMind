@@ -18,6 +18,10 @@ def _position(*, status: str = PositionStatus.OPEN.value) -> Position:
         entry_price=Decimal("60000"),
         amount=Decimal("0.01"),
         opened_at=NOW,
+        # `fees_estimated` has an insert-time ORM default (applied at flush)
+        # rather than an in-memory one, matching `Order.dry_run`'s existing
+        # pattern — an unflushed fixture like this one must set it explicitly.
+        fees_estimated=False,
     )
 
 

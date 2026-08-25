@@ -31,6 +31,12 @@ export interface Signal {
   created_at: string
   raw_response?: Record<string, unknown> | null
   model_input?: Record<string, unknown> | null
+  // Positive-expectancy plan D3/M2 — computed once per cycle, before the
+  // LLM call, so present regardless of the eventual action.
+  trade_score?: number | null
+  score_breakdown?: Record<string, number> | null
+  setup_regime?: string | null
+  volatility_regime?: 'HIGH_VOLATILITY' | 'NORMAL' | 'LOW_VOLATILITY' | null
 }
 
 export interface Decision {
@@ -45,6 +51,10 @@ export interface Decision {
   equity_snapshot_usdt: string
   risk_pct_applied: string | null
   created_at: string
+  // Positive-expectancy plan M1 (D1) — set only when approved.
+  nominal_risk_amount_usdt?: string | null
+  actual_risk_usdt?: string | null
+  stop_distance_pct?: string | null
 }
 
 export interface Order {
@@ -81,6 +91,14 @@ export interface Position {
   unrealized_pnl_usdt: string | null
   unrealized_pnl_pct: string | null
   price_updated_at: string | null
+  // Positive-expectancy plan M1 — set on close.
+  exit_reason?: string | null
+  fees_usdt?: string | null
+  fees_estimated?: boolean
+  r_multiple?: string | null
+  // Positive-expectancy plan M2 — denormalized from the entry Signal at open.
+  market_regime?: string | null
+  trade_score?: number | null
 }
 
 export interface AuditEvent {

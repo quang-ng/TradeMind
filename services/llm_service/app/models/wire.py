@@ -95,3 +95,13 @@ class TradingSignal(BaseModel):
     model_name: str
     raw_response: dict | None = None
     status: SignalStatus = SignalStatus.PENDING
+    # Positive-expectancy plan D3/M2: promoted to first-class fields rather
+    # than buried in `raw_response` (the mistake the D2/Section 1 gap
+    # analysis found with `strategy_selected` — computed every cycle,
+    # unindexed, unqueryable). Always populated together, computed once by
+    # `AnalysisPipeline` before the LLM call, so every signal carries them
+    # regardless of the eventual action (including HOLD/failure paths).
+    trade_score: int | None = None
+    score_breakdown: dict | None = None
+    setup_regime: str | None = None
+    volatility_regime: str | None = None

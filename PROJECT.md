@@ -263,7 +263,8 @@ trademind/
 │   │   │   ├── main.py            # FastAPI app: POST /analyze — composition root only
 │   │   │   ├── models/            # wire.py (Section 8 contract), market.py, strategy.py, llm.py
 │   │   │   ├── context/           # ContextBuilder: AnalyzeRequest -> MarketContext
-│   │   │   ├── strategies/        # StrategySelector: deterministic regime classification
+│   │   │   ├── strategies/        # StrategySelector (regime) + VolatilityClassifier (ATR bucket)
+│   │   │   ├── scoring/           # TradeScorer: deterministic 0-100 setup-quality rubric
 │   │   │   ├── prompts/           # versioned prompt templates + PromptBuilder
 │   │   │   ├── llm/               # LLMClient (retry/timeout) + providers/ (anthropic, ollama)
 │   │   │   ├── validators/        # structural + semantic validation, ResponseValidator
@@ -375,6 +376,10 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `price` | numeric | Close price of `candle_ts`. Added in Phase 2: the Section 9.2 sizing formula needs the entry price that produced this signal, and this is the only place it survives past the LLM call |
 | `atr_14` | numeric | ATR(14) at `candle_ts`, same rationale as `price` — Section 9.2's stop-distance calculation is not derivable without it |
 | `status` | enum | `PENDING` \| `CONSUMED` \| `EXPIRED` |
+| `trade_score` | integer, nullable, indexed | 0-100, from `llm_service`'s `TradeScorer` (Section 8, positive-expectancy plan D3/M2). Set on every signal, computed before the LLM call |
+| `score_breakdown` | jsonb, nullable | Per-component sub-scores (Trend/Momentum/Volume/Regime/Risk:Reward/Volatility) plus the assumed-reward figures that produced them — audit/debugging detail behind the single `trade_score` total |
+| `setup_regime` | text, nullable, indexed | `StrategySelector`'s existing label (`trend_following` \| `trend_pullback` \| `momentum_continuation` \| `mean_reversion`), promoted from `raw_response` to a first-class column |
+| `volatility_regime` | text, nullable, indexed | `HIGH_VOLATILITY` \| `NORMAL` \| `LOW_VOLATILITY`, from `VolatilityClassifier` — the one genuinely new regime dimension (plan D2), orthogonal to `setup_regime` |
 | `created_at` | timestamptz | |
 
 ### 7.2 RiskDecision
@@ -391,6 +396,9 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `stop_loss_price` | numeric, nullable | |
 | `equity_snapshot_usdt` | numeric, nullable | Authenticated Freqtrade account equity at decision time; `null` only when the decision was rejected because no valid balance could be obtained |
 | `risk_pct_applied` | numeric, nullable | |
+| `nominal_risk_amount_usdt` | numeric, nullable | `equity_usdt * risk_per_trade_pct` at decision time — the pre-clamp risk budget. Set only if approved (Positive-Expectancy plan D1) |
+| `actual_risk_usdt` | numeric, nullable | `position_size_usdt * stop_distance_pct` — what was truly at stake on this specific trade once `max_position_pct`/free-balance/confidence clamps are applied. This, not the nominal figure, is the R-multiple denominator used everywhere expectancy math happens (`positions.r_multiple`). Set only if approved |
+| `stop_distance_pct` | numeric, nullable | Already computed by `sizing.compute_sizing`; persisted here rather than only used transiently. Set only if approved |
 | `created_at` | timestamptz | |
 
 ### 7.3 Order
@@ -423,6 +431,12 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `amount` | numeric | |
 | `pnl_usdt` / `pnl_pct` | numeric, nullable | Set on close |
 | `opened_at` / `closed_at` | timestamptz | |
+| `exit_reason` | text, nullable, indexed | `atr_stoploss` \| `trailing_stop` \| `minimal_roi` \| `llm_sell_signal` \| `roi` \| `manual` — copied verbatim from the Freqtrade webhook's `exit_reason` on close (Positive-Expectancy plan M1). `null` for positions closed before this field existed (no retroactive backfill, plan D5) |
+| `fees_usdt` | numeric, nullable | Set on close. Always config-estimated today (`RiskConfig.estimated_fee_pct`, round-trip on entry+exit notional) — the Freqtrade webhook payload carries no real per-trade fee figure yet |
+| `fees_estimated` | boolean | Default `false`; `true` whenever `fees_usdt` came from `estimated_fee_pct` rather than a genuine Freqtrade-reported fee (currently always `true` when `fees_usdt` is set, since no real source exists yet) |
+| `r_multiple` | numeric, nullable | `pnl_usdt / risk_decisions.actual_risk_usdt`, resolved via `entry_order_id → Order.risk_decision_id → RiskDecision`. `null` for legacy positions and whenever the linked decision has no `actual_risk_usdt` (plan D5) |
+| `market_regime` | text, nullable, indexed | Copy of the entry `Signal.setup_regime` (positive-expectancy plan M2), denormalized at open the same way `entry_price`/`amount` already are. `null` for positions opened before this field existed |
+| `trade_score` | integer, nullable, indexed | Copy of the entry `Signal.trade_score`, same denormalization rationale |
 
 `GET /positions` enriches open-position responses with non-persisted
 `current_price`, `current_value_usdt`, `unrealized_pnl_usdt`,
@@ -502,7 +516,7 @@ Singleton table (single row, `id = 1`), Postgres as durable source of truth; Red
 
 The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze`. It is a pure function from market context to opinion — no memory of prior calls beyond what is explicitly passed in `position_context`, no side effects.
 
-Internally, `POST /analyze` runs a fixed in-process pipeline (`services/pipeline.py`'s `AnalysisPipeline`, composed in `main.py`): **Context Builder** (`context/builder.py`) normalizes the request into a typed `MarketContext` → **Strategy Selector** (`strategies/selector.py`) deterministically labels the market regime (trend-following / trend-pullback / momentum-continuation / mean-reversion) from that context, with no LLM call and no BUY/SELL/HOLD output → **Prompt Builder** (`prompts/builder.py`) assembles the system + user prompt → **LLM Client** (`llm/client.py`) invokes the configured `Provider` with retry/timeout → **Response Validator** (`validators/`) runs the structural + semantic checks below → **Signal Generator** (`signals/generator.py`) produces the final `TradingSignal`. This is an internal decomposition of one service, not a new trust boundary or a second LLM call — the sections below still define the one and only model-facing contract.
+Internally, `POST /analyze` runs a fixed in-process pipeline (`services/pipeline.py`'s `AnalysisPipeline`, composed in `main.py`): **Context Builder** (`context/builder.py`) normalizes the request into a typed `MarketContext` → **Strategy Selector** (`strategies/selector.py`) deterministically labels the market regime (trend-following / trend-pullback / momentum-continuation / mean-reversion) from that context, with no LLM call and no BUY/SELL/HOLD output → **Volatility Classifier** (`strategies/volatility_classifier.py`) buckets ATR-relative-to-price into `HIGH_VOLATILITY`/`NORMAL`/`LOW_VOLATILITY` → **Trade Scorer** (`scoring/trade_score.py`) computes a deterministic 0-100 setup-quality score from the same context (positive-expectancy plan D3; Trend/Momentum/Volume/Regime/Risk:Reward/Volatility sub-scores) → **Prompt Builder** (`prompts/builder.py`) assembles the system + user prompt → **LLM Client** (`llm/client.py`) invokes the configured `Provider` with retry/timeout → **Response Validator** (`validators/`) runs the structural + semantic checks below → **Signal Generator** (`signals/generator.py`) produces the final `TradingSignal`. This is an internal decomposition of one service, not a new trust boundary or a second LLM call — the sections below still define the one and only model-facing contract. Strategy/volatility/score are computed once per cycle, before the LLM call, from `context` alone — every `TradingSignal` this pipeline returns carries them (`trade_score`, `score_breakdown`, `setup_regime`, `volatility_regime`, Section 7.1), including HOLD/failure early-return paths, as first-class fields rather than folded into `raw_response`.
 
 ### 8.1 Input — what the LLM receives
 
@@ -748,7 +762,15 @@ position_size_usdt = min(
 )
 
 stop_loss_price = entry_price * (1 - stop_distance_pct)   # long-only, MVP
+
+# Positive-Expectancy plan D1 — persisted on RiskDecision (Section 7.2),
+# both computed by sizing.compute_sizing but distinct in meaning:
+nominal_risk_amount_usdt = risk_amount_usdt          # the pre-clamp budget
+actual_risk_usdt         = position_size_usdt * stop_distance_pct  # what's
+                                                       # truly at stake here
 ```
+
+`nominal_risk_amount_usdt` is the account-level budget targeted *before* `max_position_pct`, free-balance, and confidence-based clamps run; `actual_risk_usdt` is what genuinely remains at risk-if-stopped for *this* trade once those clamps have bound (always `<= nominal_risk_amount_usdt`, equal only when nothing clamped). Per the vision doc's own definition of 1R ("the maximum amount of money intentionally risked on one trade"), `actual_risk_usdt` — never the nominal figure — is the denominator for every R-multiple and expectancy calculation (`Position.r_multiple = pnl_usdt / actual_risk_usdt`).
 
 All monetary and sizing arithmetic uses fixed-point/`Decimal` types — never floating point — to avoid rounding drift in audit figures and order amounts.
 

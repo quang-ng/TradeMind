@@ -15,8 +15,8 @@ from decimal import Decimal
 import httpx
 import pytest
 from common.config import DatabaseSettings, RiskConfig
-from common.db.models import Order, Position, RiskDecision, Signal
-from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
+from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
+from common.enums import Action, AuditEventType, OrderStatus, PositionStatus, SignalStatus
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -212,6 +212,36 @@ async def test_entry_signal_approved_submits_forceenter_and_persists_order(db_se
         assert order.side == "BUY"
         assert decision.stop_loss_price is not None
         assert b'"entry_tag":"slpct:' in captured["body"]
+        # Positive-expectancy plan M1: nominal/actual risk + stop distance
+        # are persisted on every approved decision, not just used transiently.
+        assert decision.stop_distance_pct is not None
+        assert decision.nominal_risk_amount_usdt is not None
+        assert decision.actual_risk_usdt is not None
+        assert decision.actual_risk_usdt <= decision.nominal_risk_amount_usdt
+
+        audit_event = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.trace_id == decision.trace_id,
+                    AuditEvent.event_type == AuditEventType.RISK_APPROVED.value,
+                )
+            )
+        ).scalar_one()
+        # Compared with a tight tolerance, not exact equality: the audit
+        # payload is written from the full-precision in-memory Decimal
+        # (e.g. a repeating 500/60000 ATR ratio), while the Numeric(20,8)/
+        # Numeric(10,6) columns round to their declared scale on the round
+        # trip through Postgres — a real, expected precision difference,
+        # not a bug.
+        assert Decimal(audit_event.payload["actual_risk_usdt"]) == pytest.approx(
+            decision.actual_risk_usdt, abs=Decimal("0.00000001")
+        )
+        assert Decimal(audit_event.payload["nominal_risk_amount_usdt"]) == pytest.approx(
+            decision.nominal_risk_amount_usdt, abs=Decimal("0.00000001")
+        )
+        assert Decimal(audit_event.payload["stop_distance_pct"]) == pytest.approx(
+            decision.stop_distance_pct, abs=Decimal("0.000001")
+        )
 
 
 async def test_entry_signal_approved_but_freqtrade_unreachable_marks_order_failed(

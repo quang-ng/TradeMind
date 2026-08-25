@@ -208,6 +208,49 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     assert "provider_override" not in signal_row.model_input
     assert len(signal_row.model_input["ohlcv"]) == 4
 
+    # Positive-expectancy plan M2/Section 5: SIGNAL_RECEIVED audited once
+    # per cycle, alongside the Signal row itself.
+    audit_event = captured_session.added[1]
+    assert audit_event.event_type == "SIGNAL_RECEIVED"
+    assert audit_event.payload["signal_id"] == str(signal_row.id)
+    assert audit_event.payload["symbol"] == "BTC/USDT"
+    assert audit_event.payload["action"] == "BUY"
+
+
+async def test_run_cycle_persists_trade_journal_fields_from_the_analyze_response(
+    monkeypatch, settings
+):
+    candles = _candles(25)
+    monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
+    redis_client = FakeRedis()
+    captured_session = FakeSession()
+    payload = {
+        **LLM_PAYLOAD,
+        "trade_score": 72,
+        "score_breakdown": {"trend": 20, "momentum": 15},
+        "setup_regime": "trend_pullback",
+        "volatility_regime": "NORMAL",
+    }
+
+    await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=lambda: captured_session,
+        http_client=_http_client_returning(payload),
+        settings=settings,
+    )
+
+    signal_row = captured_session.added[0]
+    assert signal_row.trade_score == 72
+    assert signal_row.score_breakdown == {"trend": 20, "momentum": 15}
+    assert signal_row.setup_regime == "trend_pullback"
+    assert signal_row.volatility_regime == "NORMAL"
+
+    audit_event = captured_session.added[1]
+    assert audit_event.payload["trade_score"] == 72
+    assert audit_event.payload["setup_regime"] == "trend_pullback"
+    assert audit_event.payload["volatility_regime"] == "NORMAL"
+
 
 async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeypatch, settings):
     candles = _candles(25)

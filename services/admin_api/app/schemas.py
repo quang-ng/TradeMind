@@ -47,6 +47,10 @@ class SignalOut(BaseModel):
     price: Decimal
     atr_14: Decimal
     status: str
+    trade_score: int | None = None
+    score_breakdown: dict[str, Any] | None = None
+    setup_regime: str | None = None
+    volatility_regime: str | None = None
     created_at: datetime
 
 
@@ -68,6 +72,9 @@ class RiskDecisionOut(BaseModel):
     stop_loss_price: Decimal | None
     equity_snapshot_usdt: Decimal | None
     risk_pct_applied: Decimal | None
+    nominal_risk_amount_usdt: Decimal | None = None
+    actual_risk_usdt: Decimal | None = None
+    stop_distance_pct: Decimal | None = None
     created_at: datetime
 
 
@@ -104,6 +111,12 @@ class PositionOut(BaseModel):
     pnl_pct: Decimal | None
     opened_at: datetime
     closed_at: datetime | None
+    exit_reason: str | None = None
+    fees_usdt: Decimal | None = None
+    fees_estimated: bool = False
+    r_multiple: Decimal | None = None
+    market_regime: str | None = None
+    trade_score: int | None = None
     current_price: Decimal | None = None
     current_value_usdt: Decimal | None = None
     unrealized_pnl_usdt: Decimal | None = None
