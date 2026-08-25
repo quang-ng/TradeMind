@@ -53,8 +53,15 @@ class LLMServiceSettings(BaseSettings):
     # local inference; the Scheduler staggers normal requests within each
     # thirty-minute candle period, which leaves plenty of room above 180s
     # for a CPU-bound model (e.g. llama3.2:3b) without risking overlap into
-    # the next candle's cycle.
-    analyze_timeout_seconds: float = 300.0
+    # the next candle's cycle. Raised 300s -> 450s (2026-08-25 review): on
+    # the actual production VPS (8 vCPU, CPU-only qwen2.5:7b), observed
+    # generation speed fell as low as ~0.6 tok/s, so 300s sat below the
+    # model's own worst-case latency rather than above it — 24-42%
+    # `llm_timeout` rate in 10 days of live signals, not an occasional
+    # backstop. `signal_max_age_minutes` (65 min) has ample headroom above
+    # 450s. If `SchedulerSettings.llm_request_timeout_seconds` is also
+    # overridden it must stay a few seconds above this value.
+    analyze_timeout_seconds: float = 450.0
     # ResponseValidator's repair-prompt retry (llm_service/app/validators/
     # response_validator.py). 0 reproduces PROJECT.md Section 8.3's
     # documented "no retry" behavior for a malformed/schema-invalid response
@@ -125,9 +132,9 @@ class SchedulerSettings(BaseSettings):
 
     llm_service_url: str = "http://localhost:8001/analyze"
     # Must stay a few seconds above LLMServiceSettings.analyze_timeout_seconds
-    # (300s) so the service's own timeout fires first and returns a HOLD
+    # (450s) so the service's own timeout fires first and returns a HOLD
     # signal, rather than this HTTP client cutting the connection early.
-    llm_request_timeout_seconds: float = 305.0
+    llm_request_timeout_seconds: float = 455.0
     candle_lookback: int = 200
     # Distinct from candle_lookback: indicator math (e.g. ema_200) needs the
     # full lookback, but the LLM already receives those computed indicators
