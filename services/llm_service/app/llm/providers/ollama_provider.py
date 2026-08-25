@@ -57,8 +57,14 @@ class OllamaProvider(Provider):
                     # Valid responses are normally ~100-160 tokens. A hard
                     # ceiling prevents a small local model from rambling
                     # until the service-wide timeout and turning an
-                    # otherwise usable cycle into a technical HOLD.
-                    "num_predict": 220,
+                    # otherwise usable cycle into a technical HOLD. Capped
+                    # at the top of that observed range (2026-08-25): on
+                    # this CPU-only host, generation ran as slow as ~0.6
+                    # tok/s in the observed tail, so the old 220-token
+                    # ceiling alone could take ~370s — already past
+                    # `analyze_timeout_seconds` before prompt eval is even
+                    # counted. 160 caps the same worst case at ~270s.
+                    "num_predict": 160,
                 },
                 # Multiple symbols run within each five-minute candle period
                 # (PROJECT.md Section 5). Keep the model resident so normal

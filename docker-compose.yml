@@ -104,7 +104,7 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-180}
+      ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-450}
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
@@ -135,7 +135,7 @@ services:
       TIMEFRAME: ${TIMEFRAME:-5m}
       CANDLE_SETTLE_SECOND: ${CANDLE_SETTLE_SECOND:-15}
       SYMBOL_STAGGER_SECONDS: ${SYMBOL_STAGGER_SECONDS:-70}
-      LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-185}
+      LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-455}
       LLM_OHLCV_WINDOW: ${LLM_OHLCV_WINDOW:-4}
       # Comma-separated (common/config.py's SchedulerSettings splits it) —
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
