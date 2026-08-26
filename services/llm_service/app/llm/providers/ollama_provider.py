@@ -54,17 +54,24 @@ class OllamaProvider(Provider):
                 "stream": False,
                 "options": {
                     "temperature": self._temperature,
-                    # Valid responses are normally ~100-160 tokens. A hard
-                    # ceiling prevents a small local model from rambling
-                    # until the service-wide timeout and turning an
-                    # otherwise usable cycle into a technical HOLD. Capped
-                    # at the top of that observed range (2026-08-25): on
-                    # this CPU-only host, generation ran as slow as ~0.6
-                    # tok/s in the observed tail, so the old 220-token
-                    # ceiling alone could take ~370s — already past
-                    # `analyze_timeout_seconds` before prompt eval is even
-                    # counted. 160 caps the same worst case at ~270s.
-                    "num_predict": 160,
+                    # Valid responses are normally ~100-160 tokens, but the
+                    # full schema (action/confidence/reasoning/
+                    # key_indicators/invalidation_condition) needs headroom
+                    # above that or generation gets cut off mid-field,
+                    # leaving unparseable truncated JSON. 160 (2026-08-25)
+                    # was tuned to fit the *old* 300s analyze_timeout_seconds
+                    # but was too tight for the schema in practice: it
+                    # produced 0 malformed_json failures at 220 across
+                    # 08-19->08-24, then 21 malformed_json failures the same
+                    # day it dropped to 160 (2026-08-25) — trading the
+                    # timeout problem for a truncation problem instead of
+                    # fixing it. Restored to 220 now that
+                    # `analyze_timeout_seconds` is 450s: on this CPU-only
+                    # host, generation ran as slow as ~0.6 tok/s in the
+                    # observed tail, so 220 tokens' worst case (~370s) still
+                    # leaves ~80s of headroom for prompt eval before the
+                    # budget is hit.
+                    "num_predict": 220,
                 },
                 # Multiple symbols run within each five-minute candle period
                 # (PROJECT.md Section 5). Keep the model resident so normal
