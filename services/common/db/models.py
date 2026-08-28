@@ -159,6 +159,49 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PerformanceSnapshot(Base):
+    """Positive-expectancy plan M3 — one row per scheduled Performance
+    Engine recompute (`scheduler/app/jobs.py`), so expectancy degradation is
+    visible as a time series rather than only a single live number (feeds
+    M6 / vision-doc Phase 11's continuous-feedback loop).
+
+    This is the *unfiltered* whole-account cohort; the live
+    `GET /performance` endpoint recomputes on demand with symbol/regime/
+    score filters and does not write here. Every metric column mirrors
+    `common.performance.PerformanceReport`; the R/drawdown columns are
+    nullable for the same reasons that dataclass's fields are Optional
+    (legacy rows without `r_multiple`, no equity anchor for drawdown).
+    """
+
+    __tablename__ = "performance_snapshots"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    trades: Mapped[int] = mapped_column()
+    wins: Mapped[int] = mapped_column()
+    losses: Mapped[int] = mapped_column()
+    breakeven: Mapped[int] = mapped_column()
+    trades_with_r: Mapped[int] = mapped_column()
+    win_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    avg_win_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    avg_loss_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    expectancy_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    total_r: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    total_pnl_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    profit_factor: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    avg_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    total_fees_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    # Always NULL for now — production has no per-trade slippage source
+    # (implementation plan Section 1). Kept on the row so the column is
+    # ready the day one exists, and so a snapshot mirrors the endpoint
+    # response field-for-field.
+    total_slippage_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    starting_equity_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+
+
 class SystemState(Base):
     """PROJECT.md Section 7.6 — singleton row, id = 1."""
 

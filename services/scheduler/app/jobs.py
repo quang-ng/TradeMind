@@ -8,12 +8,16 @@ import httpx
 import pandas as pd
 import redis.asyncio as redis
 from common import redis_keys
+from common.account_balance import AccountBalanceSnapshot
 from common.config import RedisSettings, SchedulerSettings
-from common.db.models import AuditEvent, Position, Signal
+from common.db.models import AuditEvent, PerformanceSnapshot, Position, Signal
 from common.db.session import get_session_factory
 from common.enums import Action, AuditEventType, PositionStatus, SignalStatus
 from common.llm_config_store import EffectiveLLMConfig, load_effective_llm_config
+from common.performance import summarize
+from common.performance_query import load_closed_trade_metrics
 from common.sentiment import MarketIndicatorSnapshot, MarketSentiment
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from .indicators import compute_indicators
@@ -201,6 +205,77 @@ async def _run_locked_cycle(
 
     logger.info("cycle_completed", extra={"symbol": symbol, "trace_id": str(trace_id)})
     return trace_id
+
+
+async def recompute_performance_snapshot(
+    *,
+    redis_client: Any = None,
+    session_factory: Any = None,
+) -> uuid.UUID | None:
+    """Positive-expectancy plan M3 — recompute the whole-account Performance
+    Engine metrics and append one `performance_snapshots` row, so expectancy
+    is a visible time series and not just a single live number (feeds M6 /
+    vision-doc Phase 11). Scheduled daily by `build_scheduler`; the live
+    `GET /performance` endpoint serves the filterable on-demand view.
+
+    Read-only over `positions` plus one insert into a table nothing else
+    writes — no trading-state change, so no `AuditEvent` (implementation
+    plan Section 5). Returns the new snapshot id, or `None` when there are
+    no closed trades yet."""
+    owns_redis = redis_client is None
+    redis_client = redis_client or redis.from_url(
+        RedisSettings().redis_url, decode_responses=True
+    )
+    session_factory = session_factory or get_session_factory()
+    try:
+        async with session_factory() as session:
+            trades = await load_closed_trade_metrics(session)
+            if not trades:
+                logger.info("performance_snapshot_skipped_no_closed_trades")
+                return None
+            equity_anchor = await _resolve_equity_anchor(redis_client)
+            report = summarize(trades, starting_equity_usdt=equity_anchor)
+            snapshot = PerformanceSnapshot(**vars(report))
+            session.add(snapshot)
+            await session.flush()
+            await session.commit()
+            logger.info(
+                "performance_snapshot_written",
+                extra={
+                    "snapshot_id": str(snapshot.id),
+                    "trades": report.trades,
+                    "expectancy_r": (
+                        str(report.expectancy_r)
+                        if report.expectancy_r is not None
+                        else None
+                    ),
+                },
+            )
+            return snapshot.id
+    finally:
+        if owns_redis:
+            await redis_client.aclose()
+
+
+async def _resolve_equity_anchor(redis_client: Any) -> Decimal | None:
+    """Current account equity from the Risk Engine's Redis snapshot, used
+    only to anchor the drawdown equity curve. `None` (drawdown reported as
+    unknown) when the snapshot is missing, stale or unparseable — every
+    other metric is independent of it."""
+    raw = await redis_client.get(redis_keys.ACCOUNT_BALANCE_SNAPSHOT_KEY)
+    if raw is None:
+        return None
+    try:
+        balance = AccountBalanceSnapshot.model_validate_json(raw)
+    except ValidationError:
+        logger.warning("performance_snapshot_equity_anchor_unparseable")
+        return None
+    if not balance.is_fresh(
+        now=datetime.now(timezone.utc),
+        max_age_seconds=redis_keys.ACCOUNT_BALANCE_SNAPSHOT_TTL_SECONDS,
+    ):
+        return None
+    return balance.equity_usdt
 
 
 def _build_analyze_payload(

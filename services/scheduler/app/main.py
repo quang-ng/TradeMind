@@ -7,7 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from common.config import SchedulerSettings
 from common.logging import configure_json_logging
 
-from .jobs import run_cycle, timeframe_to_seconds
+from .jobs import recompute_performance_snapshot, run_cycle, timeframe_to_seconds
 
 configure_json_logging()
 logger = logging.getLogger(__name__)
@@ -20,6 +20,15 @@ async def _run_scheduled_cycle(symbol: str) -> None:
         # A failed cycle must not stop future schedules. The underlying
         # dependency failure remains fail-closed: no signal means no order.
         logger.exception("scheduled_cycle_failed", extra={"symbol": symbol})
+
+
+async def _run_performance_snapshot() -> None:
+    try:
+        await recompute_performance_snapshot()
+    except Exception:
+        # Reporting only — a failed snapshot must never disturb the trading
+        # cycles that share this scheduler.
+        logger.exception("scheduled_performance_snapshot_failed")
 
 
 def _cron_minute_field(timeframe_seconds: int, extra_minutes: int = 0) -> str | int:
@@ -80,6 +89,18 @@ def build_scheduler(settings: SchedulerSettings | None = None) -> AsyncIOSchedul
             name=f"TradeMind closed {settings.timeframe} candle cycle for {symbol}",
             replace_existing=True,
         )
+
+    # Positive-expectancy plan M3 — one Performance Engine recompute per day
+    # (00:07 UTC, clear of every candle-close boundary). The live
+    # `GET /performance` endpoint covers the interactive filterable view;
+    # this only appends the whole-account snapshot time series.
+    scheduler.add_job(
+        _run_performance_snapshot,
+        trigger=CronTrigger(hour=0, minute=7, timezone=timezone.utc),
+        id="performance-snapshot",
+        name="TradeMind daily performance-metrics snapshot",
+        replace_existing=True,
+    )
     return scheduler
 
 

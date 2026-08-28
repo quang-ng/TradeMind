@@ -166,6 +166,55 @@ class StatusOut(BaseModel):
     pairs: dict[str, PairStatus]
 
 
+# --- Performance Engine (positive-expectancy plan M3) --------------------
+
+
+class PerformanceFilters(BaseModel):
+    """Echo of the query params a `GET /performance` response was computed
+    under, so a cached/screenshotted number is never ambiguous about its
+    cohort."""
+
+    symbol: str | None = None
+    regime: str | None = None
+    score_min: int | None = None
+    score_max: int | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+
+
+class PerformanceSummary(BaseModel):
+    """PROJECT.md Section 11 `GET /performance`. R is the primary normalized
+    unit (implementation plan Section 4, M3 / D1: `r_multiple` denominator
+    is `RiskDecision.actual_risk_usdt`).
+
+    `*_r` and `*_drawdown_pct` are nullable: a trade whose entry decision
+    predates M1 has no `r_multiple` and is excluded from every R metric
+    (D5 — no retroactive backfill); the drawdown pair is `null` when no
+    account-equity anchor was available at compute time. `total_slippage_usdt`
+    is `null` because production has no per-trade slippage source yet
+    (implementation plan Section 1) — not `0`, which would misrepresent it.
+    """
+
+    trades: int
+    wins: int
+    losses: int
+    breakeven: int
+    trades_with_r: int
+    win_rate: Decimal | None
+    avg_win_r: Decimal | None
+    avg_loss_r: Decimal | None
+    expectancy_r: Decimal | None
+    total_r: Decimal | None
+    total_pnl_usdt: Decimal
+    profit_factor: Decimal | None
+    max_drawdown_pct: Decimal | None
+    avg_drawdown_pct: Decimal | None
+    total_fees_usdt: Decimal
+    total_slippage_usdt: Decimal | None
+    starting_equity_usdt: Decimal | None
+    filters: PerformanceFilters
+
+
 # --- Kill switch ---------------------------------------------------------
 
 

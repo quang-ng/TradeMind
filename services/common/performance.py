@@ -145,3 +145,79 @@ def compute_avg_drawdown_pct(
         if peak > 0 and equity < peak:
             depths.append((peak - equity) / peak)
     return sum(depths, Decimal("0")) / Decimal(len(depths)) if depths else Decimal("0")
+
+
+@dataclass(frozen=True)
+class PerformanceReport:
+    """The full M3 metric set for one cohort of closed trades. Built by
+    `summarize()` from the pure `compute_*` functions above so the live
+    endpoint (`admin_api/routers/performance.py`), the scheduled snapshot
+    job (`scheduler/app/jobs.py`) and `scripts/backtest` (M4) all report
+    the exact same numbers — Section 7's "backtest and live must be
+    provably the same math" property.
+
+    `total_slippage_usdt` is `None`, not `0`: production has no per-trade
+    slippage source today (implementation plan Section 1 — it exists only in
+    the offline backtest `Ledger`). A real `0` would falsely claim
+    slippage-free execution; `None` says "not measured".
+    """
+
+    trades: int
+    wins: int
+    losses: int
+    breakeven: int
+    trades_with_r: int
+    win_rate: Decimal | None
+    avg_win_r: Decimal | None
+    avg_loss_r: Decimal | None
+    expectancy_r: Decimal | None
+    total_r: Decimal | None
+    total_pnl_usdt: Decimal
+    profit_factor: Decimal | None
+    max_drawdown_pct: Decimal | None
+    avg_drawdown_pct: Decimal | None
+    total_fees_usdt: Decimal
+    total_slippage_usdt: Decimal | None
+    starting_equity_usdt: Decimal | None
+
+
+def summarize(
+    trades: Sequence[ClosedTradeMetrics], *, starting_equity_usdt: Decimal | None
+) -> PerformanceReport:
+    """Compose every M3 metric over one already-filtered list of closed
+    trades. `starting_equity_usdt` anchors the drawdown equity curve; when
+    the caller can't resolve it (e.g. the live account-balance snapshot is
+    stale) pass `None` — the two drawdown figures come back `None` and every
+    other metric is unaffected."""
+    drawdown_anchor = (
+        starting_equity_usdt
+        if starting_equity_usdt is not None and starting_equity_usdt > 0
+        else None
+    )
+    return PerformanceReport(
+        trades=len(trades),
+        wins=sum(1 for t in trades if t.pnl_usdt > 0),
+        losses=sum(1 for t in trades if t.pnl_usdt < 0),
+        breakeven=sum(1 for t in trades if t.pnl_usdt == 0),
+        trades_with_r=sum(1 for t in trades if t.r_multiple is not None),
+        win_rate=compute_win_rate(trades),
+        avg_win_r=compute_avg_win_r(trades),
+        avg_loss_r=compute_avg_loss_r(trades),
+        expectancy_r=compute_expectancy_r(trades),
+        total_r=compute_total_r(trades),
+        total_pnl_usdt=compute_total_pnl_usdt(trades),
+        profit_factor=compute_profit_factor(trades),
+        max_drawdown_pct=(
+            compute_max_drawdown_pct(trades, starting_equity_usdt=drawdown_anchor)
+            if drawdown_anchor is not None
+            else None
+        ),
+        avg_drawdown_pct=(
+            compute_avg_drawdown_pct(trades, starting_equity_usdt=drawdown_anchor)
+            if drawdown_anchor is not None
+            else None
+        ),
+        total_fees_usdt=compute_total_fees_usdt(trades),
+        total_slippage_usdt=None,
+        starting_equity_usdt=drawdown_anchor,
+    )

@@ -15,7 +15,11 @@ def test_build_scheduler_registers_one_hourly_job_per_symbol() -> None:
     scheduler = build_scheduler(settings)
 
     jobs = {job.id: job for job in scheduler.get_jobs()}
-    assert set(jobs) == {"closed-candle:BTC/USDT", "closed-candle:ETH/USDT"}
+    assert set(jobs) == {
+        "closed-candle:BTC/USDT",
+        "closed-candle:ETH/USDT",
+        "performance-snapshot",
+    }
     trigger = jobs["closed-candle:BTC/USDT"].trigger
     next_fire = trigger.get_next_fire_time(
         None, datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc)
@@ -28,7 +32,13 @@ def test_build_scheduler_defaults_to_five_minute_four_symbol_cadence() -> None:
 
     scheduler = build_scheduler(settings)
 
-    assert len(scheduler.get_jobs()) == 4
+    cycle_jobs = [j for j in scheduler.get_jobs() if j.id.startswith("closed-candle:")]
+    assert len(cycle_jobs) == 4
+    # positive-expectancy plan M3: one extra daily Performance Engine job
+    snapshot_fire = scheduler.get_job("performance-snapshot").trigger.get_next_fire_time(
+        None, datetime(2026, 7, 15, 13, 32, tzinfo=timezone.utc)
+    )
+    assert snapshot_fire == datetime(2026, 7, 16, 0, 7, tzinfo=timezone.utc)
     btc_trigger = scheduler.get_job("closed-candle:BTC/USDT").trigger
     eth_trigger = scheduler.get_job("closed-candle:ETH/USDT").trigger
     xrp_trigger = scheduler.get_job("closed-candle:XRP/USDT").trigger
