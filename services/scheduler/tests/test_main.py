@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 from common.config import SchedulerSettings
+
 from scheduler.app.main import _cron_minute_field, build_scheduler
 
 

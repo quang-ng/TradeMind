@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from admin_api.app.position_service import position_with_mark
 from common.db.models import Position, Signal
 from common.enums import Action, PositionStatus, SignalStatus
+
+from admin_api.app.position_service import position_with_mark
 
 NOW = datetime(2026, 7, 20, 3, 0, tzinfo=timezone.utc)
 

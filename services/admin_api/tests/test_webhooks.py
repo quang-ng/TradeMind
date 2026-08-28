@@ -8,14 +8,15 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from admin_api.app.deps import get_db_session
-from admin_api.app.main import app
-from admin_api.app.routers.webhooks import get_webhook_settings
 from common.config import DatabaseSettings, RiskConfig, WebhookSettings
 from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from admin_api.app.deps import get_db_session
+from admin_api.app.main import app
+from admin_api.app.routers.webhooks import get_webhook_settings
 
 WEBHOOK_SECRET = "test-shared-secret"
 

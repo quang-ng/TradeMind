@@ -7,6 +7,9 @@ Pure-function tests (no Postgres): the ORM loader is covered by
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from hypothesis import given
+from hypothesis import strategies as st
+
 from common.performance import (
     ClosedTradeMetrics,
     compute_avg_drawdown_pct,
@@ -19,8 +22,6 @@ from common.performance import (
     compute_win_rate,
     summarize,
 )
-from hypothesis import given
-from hypothesis import strategies as st
 
 _T0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
 

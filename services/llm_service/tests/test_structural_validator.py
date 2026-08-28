@@ -2,6 +2,7 @@ import json
 
 import pytest
 from common.enums import Action
+
 from llm_service.app.validators.structural import ValidationFailure, parse_llm_response
 
 VALID_RESPONSE = json.dumps(

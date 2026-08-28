@@ -1,6 +1,7 @@
 import smtplib
 
 from common.config import NotifierSettings
+
 from notifier.app.email_client import EmailClient
 
 

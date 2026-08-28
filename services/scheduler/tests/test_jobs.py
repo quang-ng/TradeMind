@@ -6,6 +6,7 @@ from decimal import Decimal
 import httpx
 import pytest
 from common.config import SchedulerSettings
+
 from scheduler.app import jobs
 
 HOUR_MS = 3_600_000
