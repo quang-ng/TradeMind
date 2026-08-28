@@ -117,6 +117,42 @@ export interface AuditTimeline {
   audit_events: AuditEvent[]
 }
 
+export interface PerformanceFilters {
+  symbol: string | null
+  regime: string | null
+  score_min: number | null
+  score_max: number | null
+  since: string | null
+  until: string | null
+}
+
+// Positive-expectancy plan M3 — mirrors admin_api PerformanceSummary. Every
+// R-based figure and both drawdown figures are nullable: a closed trade
+// opened before M1 has no r_multiple and is excluded from the R metrics
+// (D5), and the drawdown pair needs a live equity anchor that may be
+// missing. total_slippage_usdt is null (not 0) — production has no
+// per-trade slippage source yet.
+export interface PerformanceSummary {
+  trades: number
+  wins: number
+  losses: number
+  breakeven: number
+  trades_with_r: number
+  win_rate: string | null
+  avg_win_r: string | null
+  avg_loss_r: string | null
+  expectancy_r: string | null
+  total_r: string | null
+  total_pnl_usdt: string
+  profit_factor: string | null
+  max_drawdown_pct: string | null
+  avg_drawdown_pct: string | null
+  total_fees_usdt: string
+  total_slippage_usdt: string | null
+  starting_equity_usdt: string | null
+  filters: PerformanceFilters
+}
+
 export interface RiskConfig {
   risk_per_trade_pct: string
   max_position_pct: string

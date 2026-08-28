@@ -1,4 +1,11 @@
-import type { AuditTimeline, DashboardData, LLMConfig, RiskConfig, Signal } from './types'
+import type {
+  AuditTimeline,
+  DashboardData,
+  LLMConfig,
+  PerformanceSummary,
+  RiskConfig,
+  Signal,
+} from './types'
 
 const API_ROOT = '/api'
 
@@ -52,6 +59,29 @@ export function getSignal(apiKey: string, signalId: string): Promise<Signal> {
 
 export function getAudit(apiKey: string, traceId: string): Promise<AuditTimeline> {
   return request(`/audit?trace_id=${encodeURIComponent(traceId)}`, apiKey)
+}
+
+export interface PerformanceQuery {
+  symbol?: string
+  regime?: string
+  score_min?: number
+  score_max?: number
+  since?: string
+  until?: string
+}
+
+// Positive-expectancy plan M3. Fetched on demand (its own filtered view),
+// not part of loadDashboard's batch.
+export function getPerformance(
+  apiKey: string,
+  query: PerformanceQuery = {},
+): Promise<PerformanceSummary> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+  }
+  const qs = params.toString()
+  return request<PerformanceSummary>(`/performance${qs ? `?${qs}` : ''}`, apiKey)
 }
 
 export function setKillSwitch(apiKey: string, enabled: boolean, reason: string) {

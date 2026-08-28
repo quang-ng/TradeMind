@@ -5,6 +5,7 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
+  BarChart3,
   Bot,
   Check,
   ChevronRight,
@@ -37,6 +38,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import {
   ApiError,
   getAudit,
+  getPerformance,
   getSignal,
   loadDashboard,
   setKillSwitch,
@@ -44,7 +46,7 @@ import {
   updateLLMConfig,
   updateRiskConfig,
 } from './api'
-import { compactNumber, dateTime, money, percent, readable, shortId, timeAgo } from './format'
+import { compactNumber, dateTime, money, percent, readable, rMultiple, shortId, timeAgo } from './format'
 import type {
   Action,
   AuditTimeline,
@@ -52,12 +54,13 @@ import type {
   Decision,
   LLMConfig,
   Order,
+  PerformanceSummary,
   Position,
   RiskConfig,
   Signal,
 } from './types'
 
-type Page = 'overview' | 'signals' | 'orders' | 'positions' | 'risk' | 'llm'
+type Page = 'overview' | 'signals' | 'orders' | 'positions' | 'performance' | 'risk' | 'llm'
 type Detail = { kind: 'trace'; id: string } | { kind: 'signal'; id: string } | null
 
 const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -65,6 +68,7 @@ const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'signals', label: 'Signals & decisions', icon: SignalIcon },
   { id: 'orders', label: 'Orders', icon: ClipboardList },
   { id: 'positions', label: 'Positions & P&L', icon: WalletCards },
+  { id: 'performance', label: 'Performance', icon: BarChart3 },
   { id: 'risk', label: 'Risk controls', icon: SlidersHorizontal },
   { id: 'llm', label: 'LLM engine', icon: Bot },
 ]
@@ -246,6 +250,9 @@ export default function App() {
           {page === 'signals' && <SignalsPage data={data} onDetail={setDetail} />}
           {page === 'orders' && <OrdersPage orders={data.orders} onTrace={(id) => setDetail({ kind: 'trace', id })} />}
           {page === 'positions' && <PositionsPage positions={data.positions} />}
+          {page === 'performance' && (
+            <PerformancePage apiKey={apiKey} symbols={Object.keys(data.status.pairs)} />
+          )}
           {page === 'risk' && (
             <RiskPage
               apiKey={apiKey}
@@ -565,6 +572,127 @@ function PositionsPage({ positions }: { positions: Position[] }) {
           <tbody>{closed.map((position) => <tr key={position.id}><td><div className="market-cell"><Coin symbol={position.symbol} small /><strong>{position.symbol}</strong></div></td><td className="mono">{money(position.entry_price)}</td><td className="mono">{money(position.exit_price)}</td><td className="mono">{compactNumber(position.amount)}</td><td className={Number(position.pnl_usdt ?? 0) >= 0 ? 'positive-text' : 'negative-text'}>{money(position.pnl_usdt)}</td><td className={Number(position.pnl_pct ?? 0) >= 0 ? 'positive-text' : 'negative-text'}>{percent(position.pnl_pct)}</td><td>{dateTime(position.opened_at)}</td><td>{dateTime(position.closed_at)}</td></tr>)}{closed.length === 0 && <tr><td colSpan={8}><EmptyTable text="No positions have closed yet." /></td></tr>}</tbody>
         </table></div>
       </Panel>
+    </div>
+  )
+}
+
+const PERF_REGIMES = ['ALL', 'trend_following', 'trend_pullback', 'momentum_continuation', 'mean_reversion']
+const PERF_SCORE_BUCKETS: Record<string, { score_min?: number; score_max?: number }> = {
+  ALL: {},
+  '0–39': { score_min: 0, score_max: 39 },
+  '40–69': { score_min: 40, score_max: 69 },
+  '70–100': { score_min: 70, score_max: 100 },
+}
+
+function PerformancePage({ apiKey, symbols }: { apiKey: string; symbols: string[] }) {
+  const [symbol, setSymbol] = useState('ALL')
+  const [regime, setRegime] = useState('ALL')
+  const [scoreBucket, setScoreBucket] = useState('ALL')
+  const [summary, setSummary] = useState<PerformanceSummary | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    getPerformance(apiKey, {
+      symbol: symbol === 'ALL' ? undefined : symbol,
+      regime: regime === 'ALL' ? undefined : regime,
+      ...PERF_SCORE_BUCKETS[scoreBucket],
+    })
+      .then((value) => {
+        if (!active) return
+        setSummary(value)
+        setError(null)
+      })
+      .catch((caught) => {
+        if (!active) return
+        setError(caught instanceof Error ? caught.message : 'Could not load performance')
+      })
+    return () => {
+      active = false
+    }
+  }, [apiKey, symbol, regime, scoreBucket])
+
+  const tone = (value: string | null | undefined): 'positive' | 'negative' | undefined =>
+    value == null ? undefined : Number(value) >= 0 ? 'positive' : 'negative'
+  const drawdown = (value: string | null) =>
+    value === null ? '—' : `-${(Number(value) * 100).toFixed(2)}%`
+  const legacyExcluded = summary ? summary.trades - summary.trades_with_r : 0
+
+  return (
+    <div className="page-stack">
+      <section className="section-intro">
+        <div>
+          <h2>Trading performance</h2>
+          <p>R-normalized expectancy over the closed-position journal. 1R = the risk actually taken on each trade (RiskDecision.actual_risk_usdt).</p>
+        </div>
+      </section>
+
+      <div className="filters">
+        <Filter label="Market" value={symbol} onChange={setSymbol} options={['ALL', ...symbols]} />
+        <Filter label="Setup regime" value={regime} onChange={setRegime} options={PERF_REGIMES} />
+        <Filter label="Trade score" value={scoreBucket} onChange={setScoreBucket} options={Object.keys(PERF_SCORE_BUCKETS)} />
+      </div>
+
+      {error && <div className="form-error"><AlertTriangle size={16} /> {error}</div>}
+      {!summary && !error && <Panel><div className="drawer-loading"><LoaderCircle className="spin" /> Computing metrics…</div></Panel>}
+
+      {summary && summary.trades === 0 && (
+        <Panel><EmptyState icon={<BarChart3 />} title="No closed trades match these filters" text="Expectancy metrics appear once positions close under the selected filters." /></Panel>
+      )}
+
+      {summary && summary.trades > 0 && (
+        <>
+          <section className="metric-grid">
+            <MetricCard
+              label="Win rate"
+              value={summary.win_rate === null ? '—' : percent(summary.win_rate)}
+              note={`${summary.wins}W · ${summary.losses}L · ${summary.breakeven}BE`}
+              icon={<Gauge />}
+            />
+            <MetricCard
+              label="Expectancy (R / trade)"
+              value={rMultiple(summary.expectancy_r)}
+              note={`over ${summary.trades_with_r} R-tracked trade${summary.trades_with_r === 1 ? '' : 's'}`}
+              icon={<TrendingUp />}
+              tone={tone(summary.expectancy_r)}
+            />
+            <MetricCard
+              label="Total R"
+              value={rMultiple(summary.total_r)}
+              note={`${money(summary.total_pnl_usdt)} realized P&L`}
+              icon={<CircleDollarSign />}
+              tone={tone(summary.total_r)}
+            />
+            <MetricCard
+              label="Profit factor"
+              value={summary.profit_factor === null ? '—' : compactNumber(summary.profit_factor, 2)}
+              note={summary.profit_factor === null ? 'no losing trade yet' : 'gross profit ÷ gross loss'}
+              icon={<Activity />}
+            />
+          </section>
+
+          <Panel title="Breakdown" subtitle="Every figure over the filtered closed-trade cohort">
+            <dl className="detail-list">
+              <div><dt>Closed trades</dt><dd>{summary.trades}</dd></div>
+              <div><dt>Wins / Losses / Breakeven</dt><dd>{summary.wins} / {summary.losses} / {summary.breakeven}</dd></div>
+              <div><dt>Avg win</dt><dd>{rMultiple(summary.avg_win_r)}</dd></div>
+              <div><dt>Avg loss</dt><dd>{rMultiple(summary.avg_loss_r)}</dd></div>
+              <div><dt>Total realized P&L</dt><dd>{money(summary.total_pnl_usdt)}</dd></div>
+              <div><dt>Total fees (estimated)</dt><dd>{money(summary.total_fees_usdt)}</dd></div>
+              <div><dt>Max drawdown</dt><dd>{drawdown(summary.max_drawdown_pct)}</dd></div>
+              <div><dt>Avg drawdown</dt><dd>{drawdown(summary.avg_drawdown_pct)}</dd></div>
+              <div><dt>R-tracked trades</dt><dd>{summary.trades_with_r} of {summary.trades}</dd></div>
+              <div><dt>Slippage</dt><dd>not measured</dd></div>
+            </dl>
+            {legacyExcluded > 0 && (
+              <p className="muted">{legacyExcluded} trade{legacyExcluded === 1 ? '' : 's'} opened before M1 have no R and are excluded from every R metric.</p>
+            )}
+            {summary.max_drawdown_pct === null && (
+              <p className="muted">Drawdown needs a live account-equity anchor, which was unavailable at compute time.</p>
+            )}
+          </Panel>
+        </>
+      )}
     </div>
   )
 }

@@ -4,7 +4,7 @@
 |---|---|
 | Companion to | `docs/trademind_positive_expectancy_plan.md` (the "why"/vision doc — do not duplicate its principles here, only reference them) |
 | Authority | `PROJECT.md` remains the single source of truth for contracts. This plan proposes changes to it; it does not supersede it. Each milestone below lists the exact `PROJECT.md` sections it must update in the same PR (AGENTS.md Section 6). |
-| Status | M1 (Risk & R) and M2 (Trade Journal) implemented 2026-08-15 — not yet deployed/migrated on the VPS. M3–M6 still proposed, not built. |
+| Status | M1 (Risk & R), M2 (Trade Journal) and M3 (Performance Engine, incl. the frontend view) implemented — not yet deployed/migrated on the VPS. M4–M6 still proposed, not built. |
 | Audience | Whoever (human or agent) implements M1–M6 below, in order. |
 | Context | System is **live**, trading real money on Binance since 2026-07-27, currently ~$115 equity. Every milestone below is written with that constraint first. |
 
@@ -154,7 +154,13 @@ Numbered to match the vision doc's own M1–M6 milestone table for continuity. E
 - Tests: `test_trade_score.py`, `test_volatility_classifier.py`, extend `test_signal_generator.py`, `test_pipeline.py`/`test_analyze_endpoint.py` fixtures, scheduler job tests, webhook tests.
 - `PROJECT.md`: §8.2 (wire contract), §7.1 (Signal), §7.4 (Position), §6 (new `scoring/` package).
 
-### M3 — Performance Engine
+### M3 — Performance Engine ✅ implemented (not yet deployed to VPS)
+
+Shipped: `common/performance.py` + `common/performance_query.py` (pure math + `positions` loader),
+`GET /performance` with symbol/regime/score/date filters, `PerformanceSummary` schema, a
+`PerformanceSnapshot` table (`migration 20260827_0001`) written daily by a new Scheduler job for a
+degradation time series, the frontend **Performance** tab (headline R tiles + breakdown, reusing
+`MetricCard`/`Panel`/`Filter`), and `PROJECT.md` §4/§6/§7.7/§11.
 
 **Goal:** Win Rate, Avg Win/Loss R, Expectancy(R), Total R, Profit Factor, Max/Avg Drawdown, fees, slippage — queryable.
 

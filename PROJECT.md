@@ -139,7 +139,7 @@ graph TB
 | **PostgreSQL** | Durable, queryable audit history: every signal, decision, order, position, and system-state change | `signals`, `risk_decisions`, `orders`, `positions`, `audit_events`, `system_state` | Be bypassed — no component may take an action that changes trading state without a corresponding row written here |
 | **Redis** | Low-latency coordination: pending-signal queue, per-cycle locks, idempotency keys, cached latest state, kill-switch flag cache | Ephemeral/coordination state only (Section 10.2) | Be the system of record — anything in Redis that matters for audit must also land in PostgreSQL |
 | **FastAPI Admin API** | Human-facing read/observe/control surface | HTTP interface, auth, kill-switch endpoint, config read/patch, Freqtrade webhook ingestion | Place trades directly; expose exchange credentials |
-| **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
+| **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, R-normalized performance/expectancy metrics, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
 | **Telegram Notifier** | Push real-time notifications for signals, decisions, orders, and kill-switch events; also emails a weekly business-performance summary | Outbound Telegram messages, plus the weekly summary email | Be a control channel for anything beyond a documented kill-switch command (Section 11) |
 
 ---
@@ -274,8 +274,8 @@ trademind/
 │   │   └── tests/
 │   ├── scheduler/
 │   │   ├── app/
-│   │   │   ├── main.py            # APScheduler bootstrap
-│   │   │   ├── jobs.py            # per-symbol cycle job
+│   │   │   ├── main.py            # APScheduler bootstrap (per-symbol cycles + daily performance-snapshot job)
+│   │   │   ├── jobs.py            # per-symbol cycle job + Performance Engine snapshot writer (M3)
 │   │   │   ├── market_data.py     # Binance public REST client (ccxt)
 │   │   │   ├── indicators.py      # RSI/EMA/MACD/ATR computation
 │   │   │   └── sentiment/          # advisory weighted sentiment providers + service
@@ -293,7 +293,7 @@ trademind/
 │   ├── admin_api/
 │   │   ├── app/
 │   │   │   ├── main.py
-│   │   │   ├── routers/           # signals.py, decisions.py, positions.py,
+│   │   │   ├── routers/           # signals.py, decisions.py, positions.py, performance.py,
 │   │   │   │                      # killswitch.py, config.py, webhooks.py
 │   │   │   ├── auth.py            # API key dependency
 │   │   │   └── schemas.py
@@ -309,6 +309,9 @@ trademind/
 │       ├── db/                    # SQLAlchemy 2 models + session factory
 │       ├── redis_keys.py          # single source of truth for key naming (Section 10.2)
 │       ├── enums.py               # Action, RejectionReason, OrderStatus, ...
+│       ├── performance.py         # Performance Engine math — pure, ORM-free, shared by the
+│       │                          # endpoint, the snapshot job and scripts/backtest (M3)
+│       ├── performance_query.py   # positions -> ClosedTradeMetrics loader for the above (M3)
 │       └── config.py              # typed settings loader (pydantic-settings)
 ├── freqtrade/
 │   ├── user_data/
@@ -467,7 +470,32 @@ Singleton table (single row, `id = 1`), Postgres as durable source of truth; Red
 | `consecutive_loss_reset_at` | timestamptz, nullable | Set when an operator explicitly disables the kill switch; closed positions at or before this boundary remain in the audit history but do not count toward a new consecutive-loss streak |
 | `updated_at` | timestamptz | |
 
-### 7.7 Example: a fully approved cycle, in JSON
+### 7.7 PerformanceSnapshot
+
+Positive-expectancy plan M3. One row per scheduled Performance Engine recompute (the
+Scheduler's daily `performance-snapshot` job, `scheduler/app/jobs.py`), so expectancy
+degradation is visible as a time series rather than only a single live number. This is the
+**unfiltered whole-account cohort**; the live `GET /performance` endpoint (Section 11)
+recomputes on demand with symbol/regime/score filters and does **not** write here. Every metric
+column mirrors `common.performance.PerformanceReport` field-for-field.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID, PK | |
+| `computed_at` | timestamptz, indexed | Server default `now()` |
+| `trades` / `wins` / `losses` / `breakeven` | integer | Closed-trade counts (`pnl_usdt` `>0` / `<0` / `==0`) |
+| `trades_with_r` | integer | Trades carrying an `r_multiple` — the denominator for every R metric below |
+| `win_rate` | numeric, nullable | Fraction `0.0`–`1.0`; `null` when there are no closed trades |
+| `avg_win_r` / `avg_loss_r` | numeric, nullable | Mean R of winning / losing trades (`avg_loss_r` negative by convention); `null` when that side has no R-tracked trade |
+| `expectancy_r` / `total_r` | numeric, nullable | Over R-tracked trades only; `null` when none exist |
+| `total_pnl_usdt` | numeric | Realized P&L in USDT over the cohort |
+| `profit_factor` | numeric, nullable | Gross profit ÷ gross loss; `null` when there is no losing trade |
+| `max_drawdown_pct` / `avg_drawdown_pct` | numeric, nullable | Peak-to-trough / mean-underwater fraction of the running equity curve; `null` when no account-equity anchor was available |
+| `total_fees_usdt` | numeric | Sum of per-trade `fees_usdt` (currently always `estimated_fee_pct`-derived) |
+| `total_slippage_usdt` | numeric, nullable | Always `null` today — production has no per-trade slippage source (D5 / implementation plan §1). Kept so a snapshot mirrors the endpoint response field-for-field |
+| `starting_equity_usdt` | numeric, nullable | The equity anchor used for the drawdown curve; `null` when unavailable |
+
+### 7.8 Example: a fully approved cycle, in JSON
 
 ```json
 {
@@ -856,6 +884,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `GET` | `/orders?symbol=&status=&limit=` | **All order logs** — submitted, filled, failed, cancelled, across all pairs | API key |
 | `GET` | `/orders/{id}` | Single order detail | API key |
 | `GET` | `/audit?trace_id=` | Full timeline for one trading cycle | API key |
+| `GET` | `/performance?symbol=&regime=&score_min=&score_max=&since=&until=` | R-normalized trading performance (win rate, expectancy R, total R, profit factor, drawdown, fees) over the closed-position journal, computed on read for the filtered cohort (Section 7.7 / positive-expectancy plan M3). Read-only — writes no `AuditEvent` | API key |
 | `POST` | `/killswitch/enable` | `{ "reason": string }` — halt all new entries immediately | API key |
 | `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation and acknowledge the prior consecutive-loss streak | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
@@ -893,6 +922,23 @@ The React Operator Console is served on host loopback port `3000` by default and
 // Response 200
 { "killswitch_enabled": true, "updated_by": "api:admin", "updated_at": "2026-07-15T13:05:00Z" }
 ```
+
+**Example — `GET /performance`:**
+
+```json
+{
+  "trades": 40, "wins": 23, "losses": 16, "breakeven": 1, "trades_with_r": 31,
+  "win_rate": 0.575, "avg_win_r": 1.42, "avg_loss_r": -0.88,
+  "expectancy_r": 0.34, "total_r": 10.5, "total_pnl_usdt": 18.75,
+  "profit_factor": 3.8, "max_drawdown_pct": 0.0016, "avg_drawdown_pct": 0.0004,
+  "total_fees_usdt": 1.20, "total_slippage_usdt": null, "starting_equity_usdt": 624.00,
+  "filters": { "symbol": null, "regime": null, "score_min": null, "score_max": null, "since": null, "until": null }
+}
+```
+
+R-based figures (`*_r`) count only trades with an `r_multiple` (`trades_with_r`); trades opened
+before M1 have none and are excluded rather than treated as zero. Both drawdown figures are
+`null` when no live account-equity anchor was available at compute time.
 
 The Telegram bot supports the same two kill-switch actions as slash commands (`/killswitch_on`, `/killswitch_off`) which call this API internally with `updated_by="telegram:<chat_id>"` — Telegram is a client of the API, not a parallel control path.
 
