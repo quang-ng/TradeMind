@@ -132,7 +132,7 @@ export interface PerformanceFilters {
 // (D5), and the drawdown pair needs a live equity anchor that may be
 // missing. total_slippage_usdt is null (not 0) — production has no
 // per-trade slippage source yet.
-export interface PerformanceSummary {
+export interface PerformanceMetrics {
   trades: number
   wins: number
   losses: number
@@ -150,6 +150,24 @@ export interface PerformanceSummary {
   total_fees_usdt: string
   total_slippage_usdt: string | null
   starting_equity_usdt: string | null
+}
+
+// Positive-expectancy plan M4 — the same metric set as the headline, over
+// just the closed trades sharing one dimension value (`key`). Rows are
+// ordered by descending trade count; the catch-all
+// "(unclassified)"/"(unscored)" cohort is always last.
+export interface PerformanceCohort extends PerformanceMetrics {
+  key: string
+}
+
+export interface PerformanceBreakdowns {
+  by_regime: PerformanceCohort[]
+  by_volatility: PerformanceCohort[]
+  by_score_bucket: PerformanceCohort[]
+}
+
+export interface PerformanceSummary extends PerformanceMetrics {
+  breakdowns: PerformanceBreakdowns
   filters: PerformanceFilters
 }
 

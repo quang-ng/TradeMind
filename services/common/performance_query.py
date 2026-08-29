@@ -65,6 +65,12 @@ def _to_metrics(rows: Sequence[Position]) -> list[ClosedTradeMetrics]:
             r_multiple=None if row.r_multiple is None else Decimal(row.r_multiple),
             fees_usdt=None if row.fees_usdt is None else Decimal(row.fees_usdt),
             closed_at=row.closed_at,
+            # M4 breakdown dimensions — denormalized onto the row at open
+            # (`webhooks.py::_handle_entry_fill`); `None` for positions
+            # opened before their respective migrations (D5).
+            market_regime=row.market_regime,
+            volatility_regime=row.volatility_regime,
+            trade_score=row.trade_score,
         )
         for row in rows
         if row.closed_at is not None and row.pnl_usdt is not None

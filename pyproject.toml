@@ -16,6 +16,7 @@ dependencies = [
     "alembic>=1.13",
     "redis>=5.0",
     "apscheduler>=3.11,<4",
+    "dqflow>=0.2.1",
 ]
 
 [dependency-groups]

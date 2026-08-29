@@ -11,6 +11,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from common.performance import (
+    SCORE_BUCKETS,
     ClosedTradeMetrics,
     compute_avg_drawdown_pct,
     compute_avg_loss_r,
@@ -20,7 +21,9 @@ from common.performance import (
     compute_profit_factor,
     compute_total_r,
     compute_win_rate,
+    score_bucket_label,
     summarize,
+    summarize_breakdowns,
 )
 
 _T0 = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -32,12 +35,18 @@ def _trade(
     r: str | None = None,
     fees: str | None = "0.10",
     minutes: int = 0,
+    regime: str | None = None,
+    volatility: str | None = None,
+    score: int | None = None,
 ) -> ClosedTradeMetrics:
     return ClosedTradeMetrics(
         pnl_usdt=Decimal(pnl),
         r_multiple=None if r is None else Decimal(r),
         fees_usdt=None if fees is None else Decimal(fees),
         closed_at=_T0 + timedelta(minutes=minutes),
+        market_regime=regime,
+        volatility_regime=volatility,
+        trade_score=score,
     )
 
 
@@ -136,6 +145,71 @@ def test_total_slippage_is_none_never_zero() -> None:
 def test_fees_sum_ignores_missing_values() -> None:
     trades = [_trade("10", r="1.0", fees="0.25"), _trade("-5", r="-1.0", fees=None)]
     assert summarize(trades, starting_equity_usdt=Decimal("100")).total_fees_usdt == Decimal("0.25")
+
+
+# --- M4: score buckets + summarize_breakdowns --------------------------
+
+
+def test_score_bucket_label_edges() -> None:
+    assert score_bucket_label(0) == "0–39"
+    assert score_bucket_label(39) == "0–39"
+    assert score_bucket_label(40) == "40–69"
+    assert score_bucket_label(69) == "40–69"
+    assert score_bucket_label(70) == "70–100"
+    assert score_bucket_label(100) == "70–100"
+    assert score_bucket_label(None) == "(unscored)"
+    assert score_bucket_label(101) == "(unscored)"  # out of range, defensive
+    # the three bands tile 0..100 with no gap or overlap
+    assert [low for _, low, _ in SCORE_BUCKETS] == [0, 40, 70]
+    assert [high for _, _, high in SCORE_BUCKETS] == [39, 69, 100]
+
+
+def test_summarize_breakdowns_groups_each_dimension() -> None:
+    trades = [
+        _trade("10", r="2.0", regime="trend_pullback", volatility="NORMAL", score=80),
+        _trade(
+            "-5", r="-1.0", regime="trend_pullback",
+            volatility="HIGH_VOLATILITY", score=45, minutes=1,
+        ),
+        _trade("4", r="0.5", regime="mean_reversion", volatility="NORMAL", score=30, minutes=2),
+        _trade("6", r="0.7", regime=None, volatility=None, score=None, minutes=3),
+    ]
+    b = summarize_breakdowns(trades, starting_equity_usdt=Decimal("1000"))
+
+    regimes = {c.key: c.report.trades for c in b.by_regime}
+    assert regimes == {"trend_pullback": 2, "mean_reversion": 1, "(unclassified)": 1}
+    # per-cohort expectancy is just summarize() over that cohort
+    tp = next(c for c in b.by_regime if c.key == "trend_pullback")
+    assert tp.report.expectancy_r == Decimal("0.5")  # (2.0 + -1.0) / 2
+
+    vol = {c.key: c.report.trades for c in b.by_volatility}
+    assert vol == {"NORMAL": 2, "HIGH_VOLATILITY": 1, "(unclassified)": 1}
+
+    buckets = {c.key: c.report.trades for c in b.by_score_bucket}
+    assert buckets == {"0–39": 1, "40–69": 1, "70–100": 1, "(unscored)": 1}
+
+
+def test_summarize_breakdowns_orders_by_count_catch_all_last() -> None:
+    trades = (
+        [_trade("1", r="0.1", regime="mean_reversion", minutes=i) for i in range(3)]
+        + [_trade("1", r="0.1", regime="trend_pullback", minutes=10 + i) for i in range(1)]
+        + [_trade("1", r="0.1", regime=None, minutes=20 + i) for i in range(5)]
+    )
+    keys = [c.key for c in summarize_breakdowns(trades, starting_equity_usdt=None).by_regime]
+    # biggest known cohort first, then the smaller one, "(unclassified)" always last
+    assert keys == ["mean_reversion", "trend_pullback", "(unclassified)"]
+
+
+def test_summarize_breakdowns_cohort_counts_reconcile_with_parent() -> None:
+    trades = [
+        _trade("5", r="1.0", regime="trend_pullback", volatility="NORMAL", score=72, minutes=0),
+        _trade("-5", r="-1.0", regime="mean_reversion", score=10, minutes=1),
+        _trade("2", r=None, minutes=2),
+    ]
+    parent = summarize(trades, starting_equity_usdt=Decimal("500"))
+    b = summarize_breakdowns(trades, starting_equity_usdt=Decimal("500"))
+    for cohorts in (b.by_regime, b.by_volatility, b.by_score_bucket):
+        assert sum(c.report.trades for c in cohorts) == parent.trades
 
 
 @given(

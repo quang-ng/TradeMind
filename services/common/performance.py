@@ -19,7 +19,7 @@ SQLAlchemy dependency and the exact same rows can be built from a live
 machinery.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -38,6 +38,17 @@ class ClosedTradeMetrics:
     r_multiple: Decimal | None
     fees_usdt: Decimal | None
     closed_at: datetime
+    # Positive-expectancy plan M4 — the three journal dimensions the
+    # `summarize_breakdowns` cohorts group on. Optional so every existing
+    # `ClosedTradeMetrics(...)` call site and the headline `summarize()`
+    # path are untouched; `None` on any dimension lands the trade in that
+    # breakdown's explicit "(unclassified)"/"(unscored)" cohort rather than
+    # being dropped. `market_regime` is `StrategySelector`'s label
+    # (`Position.market_regime`), `volatility_regime` the M4-denormalized
+    # `Position.volatility_regime`, `trade_score` the 0-100 rubric total.
+    market_regime: str | None = None
+    volatility_regime: str | None = None
+    trade_score: int | None = None
 
 
 def compute_win_rate(trades: Sequence[ClosedTradeMetrics]) -> Decimal | None:
@@ -220,4 +231,110 @@ def summarize(
         total_fees_usdt=compute_total_fees_usdt(trades),
         total_slippage_usdt=None,
         starting_equity_usdt=drawdown_anchor,
+    )
+
+
+# --- M4: expectancy broken out by journal dimension --------------------
+#
+# The live endpoint and the offline replay both need "which regime / which
+# volatility bucket / which score band actually carries the edge" — the
+# same question, the same math, one implementation (implementation plan
+# Section 4 M4 / Section 7). Each cohort is just `summarize()` over a
+# subset of the already-filtered trade list, so nothing here re-derives a
+# metric.
+
+# Trade-score bands. Fixed edges, matching the frontend's existing
+# `PERF_SCORE_BUCKETS` filter (`frontend/src/App.tsx`) so the breakdown
+# table and the score filter never disagree on where a band starts.
+SCORE_BUCKETS: tuple[tuple[str, int, int], ...] = (
+    ("0–39", 0, 39),
+    ("40–69", 40, 69),
+    ("70–100", 70, 100),
+)
+_UNSCORED_LABEL = "(unscored)"
+_UNCLASSIFIED_LABEL = "(unclassified)"
+
+
+def score_bucket_label(score: int | None) -> str:
+    """The `SCORE_BUCKETS` band a trade score falls in; `"(unscored)"` for
+    `None` (legacy row, D5) or an out-of-range value."""
+    if score is None:
+        return _UNSCORED_LABEL
+    for label, low, high in SCORE_BUCKETS:
+        if low <= score <= high:
+            return label
+    return _UNSCORED_LABEL
+
+
+@dataclass(frozen=True)
+class BreakdownCohort:
+    """One row of a breakdown: a dimension value (`key`) and the full M3
+    metric set over just that value's closed trades."""
+
+    key: str
+    report: PerformanceReport
+
+
+@dataclass(frozen=True)
+class PerformanceBreakdowns:
+    """`summarize()` re-run per distinct value of each journal dimension,
+    over one already-filtered closed-trade list. Cohorts within each list
+    are ordered by descending trade count (mirroring
+    `scripts/backtest/mechanical_replay.py`'s existing by-regime ordering),
+    with the catch-all "(unclassified)"/"(unscored)" cohort always last."""
+
+    by_regime: list[BreakdownCohort]
+    by_volatility: list[BreakdownCohort]
+    by_score_bucket: list[BreakdownCohort]
+
+
+def _cohorts(
+    trades: Sequence[ClosedTradeMetrics],
+    *,
+    key_of: Callable[[ClosedTradeMetrics], str | None],
+    catch_all: str,
+    starting_equity_usdt: Decimal | None,
+) -> list[BreakdownCohort]:
+    groups: dict[str, list[ClosedTradeMetrics]] = {}
+    for trade in trades:
+        raw = key_of(trade)
+        groups.setdefault(raw if raw is not None else catch_all, []).append(trade)
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: (kv[0] == catch_all, -len(kv[1]), kv[0]),
+    )
+    return [
+        BreakdownCohort(
+            key=key,
+            report=summarize(cohort, starting_equity_usdt=starting_equity_usdt),
+        )
+        for key, cohort in ordered
+    ]
+
+
+def summarize_breakdowns(
+    trades: Sequence[ClosedTradeMetrics], *, starting_equity_usdt: Decimal | None
+) -> PerformanceBreakdowns:
+    """Expectancy-by-regime / -by-volatility / -by-score-bucket over one
+    cohort of closed trades. `starting_equity_usdt` anchors each cohort's
+    drawdown curve exactly as it does for the parent `summarize()`."""
+    return PerformanceBreakdowns(
+        by_regime=_cohorts(
+            trades,
+            key_of=lambda t: t.market_regime,
+            catch_all=_UNCLASSIFIED_LABEL,
+            starting_equity_usdt=starting_equity_usdt,
+        ),
+        by_volatility=_cohorts(
+            trades,
+            key_of=lambda t: t.volatility_regime,
+            catch_all=_UNCLASSIFIED_LABEL,
+            starting_equity_usdt=starting_equity_usdt,
+        ),
+        by_score_bucket=_cohorts(
+            trades,
+            key_of=lambda t: score_bucket_label(t.trade_score),
+            catch_all=_UNSCORED_LABEL,
+            starting_equity_usdt=starting_equity_usdt,
+        ),
     )

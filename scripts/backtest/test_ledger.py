@@ -14,7 +14,9 @@ from ledger import MINIMAL_ROI, Ledger, SimPosition  # noqa: E402
 ENTRY_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _ledger_with_position(*, entry_price, stop_loss_price, peak_price):
+def _ledger_with_position(
+    *, entry_price, stop_loss_price, peak_price, actual_risk_usdt=None
+):
     ledger = Ledger(starting_equity_usdt=Decimal("1000"))
     entry_price = Decimal(str(entry_price))
     ledger.positions["BTC/USDT"] = SimPosition(
@@ -25,6 +27,7 @@ def _ledger_with_position(*, entry_price, stop_loss_price, peak_price):
         size_base=Decimal("100") / entry_price,
         stop_loss_price=Decimal(str(stop_loss_price)),
         peak_price=Decimal(str(peak_price)),
+        actual_risk_usdt=None if actual_risk_usdt is None else Decimal(str(actual_risk_usdt)),
     )
     return ledger
 
@@ -86,6 +89,32 @@ def test_trailing_stop_locks_in_more_than_the_atr_floor():
     assert trade.exit_reason == "trailing_stop"
     assert trade.exit_price == Decimal("100.9625")  # touched, not gapped through
     assert trade.exit_price > Decimal("97.0")
+
+
+def test_r_multiple_is_pnl_over_actual_risk_on_close():
+    """Positive-expectancy plan M4: `ClosedTrade.r_multiple` uses the same
+    `pnl_usdt / actual_risk_usdt` definition the live path persists on
+    `Position.r_multiple` (M1)."""
+    ledger = _ledger_with_position(
+        entry_price=100.0, stop_loss_price=97.0, peak_price=100.0, actual_risk_usdt="4"
+    )
+    candle = _candle(o=100.5, h=100.5, low=96.5, c=100.2)
+
+    trade = ledger.check_static_exit("BTC/USDT", candle, ENTRY_TIME + timedelta(hours=1))
+
+    assert trade is not None
+    assert trade.r_multiple == trade.pnl_usdt / Decimal("4")
+    assert trade.r_multiple < 0  # exited at the stop
+
+
+def test_r_multiple_is_none_without_a_recorded_actual_risk():
+    ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
+    candle = _candle(o=100.5, h=100.5, low=96.5, c=100.2)
+
+    trade = ledger.check_static_exit("BTC/USDT", candle, ENTRY_TIME + timedelta(hours=1))
+
+    assert trade is not None
+    assert trade.r_multiple is None
 
 
 def test_minimal_roi_uses_the_720_minute_tiers_new_2pct_floor():

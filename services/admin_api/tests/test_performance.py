@@ -53,6 +53,7 @@ async def _seed_closed_position(
     r_multiple: str | None,
     fees_usdt: str | None = "0.10",
     market_regime: str | None = None,
+    volatility_regime: str | None = None,
     trade_score: int | None = None,
     minutes: int = 0,
 ) -> None:
@@ -116,6 +117,7 @@ async def _seed_closed_position(
                 fees_estimated=True,
                 r_multiple=None if r_multiple is None else Decimal(r_multiple),
                 market_regime=market_regime,
+                volatility_regime=volatility_regime,
                 trade_score=trade_score,
             )
         )
@@ -133,6 +135,11 @@ async def test_performance_empty_history(client, auth_headers):
     assert body["profit_factor"] is None
     assert body["total_pnl_usdt"] == "0"
     assert body["total_slippage_usdt"] is None
+    assert body["breakdowns"] == {
+        "by_regime": [],
+        "by_volatility": [],
+        "by_score_bucket": [],
+    }
 
 
 async def test_performance_computes_r_metrics(client, db_session_factory, auth_headers):
@@ -198,6 +205,51 @@ async def test_performance_filters_by_symbol_regime_and_score(
     ).json()
     assert by_score["trades"] == 1
     assert Decimal(by_score["expectancy_r"]) == Decimal("2.0")
+
+
+async def test_performance_breakdowns_slice_the_filtered_cohort(
+    client, db_session_factory, auth_headers
+):
+    """M4: one `/performance` call returns expectancy sliced by setup
+    regime, volatility regime and score bucket over the same cohort."""
+    await _seed_closed_position(
+        db_session_factory, pnl_usdt="20", r_multiple="2.0",
+        market_regime="trend_pullback", volatility_regime="NORMAL",
+        trade_score=80, minutes=0,
+    )
+    await _seed_closed_position(
+        db_session_factory, pnl_usdt="10", r_multiple="1.0",
+        market_regime="trend_pullback", volatility_regime="HIGH_VOLATILITY",
+        trade_score=75, minutes=1,
+    )
+    await _seed_closed_position(
+        db_session_factory, pnl_usdt="-10", r_multiple="-1.0",
+        market_regime="mean_reversion", volatility_regime="NORMAL",
+        trade_score=45, minutes=2,
+    )
+    # legacy row — no journal dimensions
+    await _seed_closed_position(
+        db_session_factory, pnl_usdt="3", r_multiple=None, minutes=3,
+    )
+
+    breakdowns = (
+        await client.get("/performance", headers=auth_headers)
+    ).json()["breakdowns"]
+
+    regime = {c["key"]: c for c in breakdowns["by_regime"]}
+    assert regime["trend_pullback"]["trades"] == 2
+    assert Decimal(regime["trend_pullback"]["expectancy_r"]) == Decimal("1.5")
+    assert regime["mean_reversion"]["trades"] == 1
+    assert regime["(unclassified)"]["trades"] == 1
+    # biggest cohort first, catch-all last
+    assert [c["key"] for c in breakdowns["by_regime"]][0] == "trend_pullback"
+    assert [c["key"] for c in breakdowns["by_regime"]][-1] == "(unclassified)"
+
+    volatility = {c["key"]: c["trades"] for c in breakdowns["by_volatility"]}
+    assert volatility == {"NORMAL": 2, "HIGH_VOLATILITY": 1, "(unclassified)": 1}
+
+    buckets = {c["key"]: c["trades"] for c in breakdowns["by_score_bucket"]}
+    assert buckets == {"70–100": 2, "40–69": 1, "(unscored)": 1}
 
 
 async def test_performance_rejects_inverted_score_bucket(client, auth_headers):

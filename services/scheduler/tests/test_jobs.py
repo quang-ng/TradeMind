@@ -370,6 +370,12 @@ class _FakeClosedPosition:
         self.r_multiple = None if r is None else Decimal(r)
         self.fees_usdt = None if fees is None else Decimal(fees)
         self.closed_at = datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+        # M4 breakdown dimensions — the daily snapshot is whole-account and
+        # doesn't slice on these, but `performance_query._to_metrics` reads
+        # them off every row now.
+        self.market_regime = None
+        self.volatility_regime = None
+        self.trade_score = None
 
 
 class _FakeScalarResult:

@@ -440,6 +440,7 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `r_multiple` | numeric, nullable | `pnl_usdt / risk_decisions.actual_risk_usdt`, resolved via `entry_order_id → Order.risk_decision_id → RiskDecision`. `null` for legacy positions and whenever the linked decision has no `actual_risk_usdt` (plan D5) |
 | `market_regime` | text, nullable, indexed | Copy of the entry `Signal.setup_regime` (positive-expectancy plan M2), denormalized at open the same way `entry_price`/`amount` already are. `null` for positions opened before this field existed |
 | `trade_score` | integer, nullable, indexed | Copy of the entry `Signal.trade_score`, same denormalization rationale |
+| `volatility_regime` | text, nullable, indexed | Copy of the entry `Signal.volatility_regime` (positive-expectancy plan M4), same denormalization rationale. Powers `GET /performance`'s expectancy-by-volatility breakdown. `null` for positions opened before this field existed |
 
 `GET /positions` enriches open-position responses with non-persisted
 `current_price`, `current_value_usdt`, `unrealized_pnl_usdt`,
@@ -828,6 +829,34 @@ The Risk Engine is the system's fail-closed authority. This table governs behavi
 | Telegram unreachable | Logged as a warning; never blocks or delays a trading decision — notification is best-effort, decisioning is not |
 | Any unhandled exception in the Risk Engine evaluation path | Caught at the top level, signal is marked `approved=false, reason=INTERNAL_ERROR`, exception logged with `trace_id`, Telegram alerted. **Never allowed to propagate into an approval by default.** |
 
+### 9.5 Performance Engine
+
+Documented here as the Risk Engine's read-side counterpart: the same "pure, deterministic,
+no I/O in the core" discipline (Section 9.2), applied to measuring outcomes rather than gating
+entries. It has **zero execution authority** and writes no trading state — it only reads the
+closed-position journal.
+
+- **Math** lives in `services/common/performance.py` — pure functions over
+  `ClosedTradeMetrics` rows (`pnl_usdt`, `r_multiple`, `fees_usdt`, `closed_at`, and the
+  `market_regime` / `volatility_regime` / `trade_score` journal dimensions), no ORM import.
+  `services/common/performance_query.py` is the one place that turns the live `positions`
+  table into those rows. `scripts/backtest/` calls the **exact same** functions over replayed
+  trades (`scripts/backtest/report.py`, `expectancy_report.py`), so a backtest expectancy
+  figure and the live one are the same computation on different inputs — no strategy change is
+  ever justified by a backtest number the live path couldn't reproduce (positive-expectancy
+  plan Section 7).
+- **Metrics:** Win Rate, Avg Win/Loss R, Expectancy(R), Total R, Total P&L, Profit Factor,
+  Max/Avg Drawdown, Fees. **1R is `RiskDecision.actual_risk_usdt`** — the post-clamp amount
+  truly at stake on that trade, not the nominal `equity × risk_pct` budget (plan D1). A trade
+  with no `r_multiple` (opened before M1, or a decision with no `actual_risk_usdt`) is excluded
+  from every R metric, never counted as 0R (plan D5).
+- **Surfaces:** `GET /performance` (Section 11) computes on read for a filtered cohort and adds
+  `breakdowns` by setup regime / volatility regime / score bucket; the Scheduler's daily
+  `PerformanceSnapshot` (Section 7.7) records the unfiltered whole-account cohort as a
+  degradation time series. Neither writes an `AuditEvent` — Section 14 rule 7 scopes the audit
+  trail to state-changing writes, and a per-read audit row would conflate the audit trail with
+  an access log.
+
 ---
 
 ## 10. Database & Redis Design
@@ -884,7 +913,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `GET` | `/orders?symbol=&status=&limit=` | **All order logs** — submitted, filled, failed, cancelled, across all pairs | API key |
 | `GET` | `/orders/{id}` | Single order detail | API key |
 | `GET` | `/audit?trace_id=` | Full timeline for one trading cycle | API key |
-| `GET` | `/performance?symbol=&regime=&score_min=&score_max=&since=&until=` | R-normalized trading performance (win rate, expectancy R, total R, profit factor, drawdown, fees) over the closed-position journal, computed on read for the filtered cohort (Section 7.7 / positive-expectancy plan M3). Read-only — writes no `AuditEvent` | API key |
+| `GET` | `/performance?symbol=&regime=&score_min=&score_max=&since=&until=` | R-normalized trading performance (win rate, expectancy R, total R, profit factor, drawdown, fees) over the closed-position journal, computed on read for the filtered cohort, plus `breakdowns` slicing that cohort by setup regime / volatility regime / score bucket (Section 7.7 / positive-expectancy plan M3+M4). Read-only — writes no `AuditEvent` | API key |
 | `POST` | `/killswitch/enable` | `{ "reason": string }` — halt all new entries immediately | API key |
 | `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation and acknowledge the prior consecutive-loss streak | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
@@ -932,6 +961,15 @@ The React Operator Console is served on host loopback port `3000` by default and
   "expectancy_r": 0.34, "total_r": 10.5, "total_pnl_usdt": 18.75,
   "profit_factor": 3.8, "max_drawdown_pct": 0.0016, "avg_drawdown_pct": 0.0004,
   "total_fees_usdt": 1.20, "total_slippage_usdt": null, "starting_equity_usdt": 624.00,
+  "breakdowns": {
+    "by_regime": [
+      { "key": "trend_pullback", "trades": 18, "expectancy_r": 0.61, "total_r": 11.0, "profit_factor": 4.9, "win_rate": 0.67, "...": "…every headline metric, per cohort" },
+      { "key": "mean_reversion", "trades": 14, "expectancy_r": 0.10, "...": "…" },
+      { "key": "(unclassified)", "trades": 8, "...": "…legacy rows with no setup_regime" }
+    ],
+    "by_volatility": [ { "key": "NORMAL", "...": "…" }, { "key": "HIGH_VOLATILITY", "...": "…" } ],
+    "by_score_bucket": [ { "key": "70–100", "...": "…" }, { "key": "40–69", "...": "…" }, { "key": "0–39", "...": "…" } ]
+  },
   "filters": { "symbol": null, "regime": null, "score_min": null, "score_max": null, "since": null, "until": null }
 }
 ```
@@ -939,6 +977,13 @@ The React Operator Console is served on host loopback port `3000` by default and
 R-based figures (`*_r`) count only trades with an `r_multiple` (`trades_with_r`); trades opened
 before M1 have none and are excluded rather than treated as zero. Both drawdown figures are
 `null` when no live account-equity anchor was available at compute time.
+
+Each `breakdowns` list re-runs the full metric computation per distinct value of one journal
+dimension over the **same filtered cohort** (positive-expectancy plan M4). Cohorts are ordered
+by descending trade count; the catch-all `"(unclassified)"` / `"(unscored)"` cohort (rows whose
+dimension is `null`) is always last. Score buckets are the fixed bands `0–39` / `40–69` /
+`70–100`. This is the only lens the endpoint adds over the daily `PerformanceSnapshot`
+(Section 7.7), which stays whole-account and unsliced.
 
 The Telegram bot supports the same two kill-switch actions as slash commands (`/killswitch_on`, `/killswitch_off`) which call this API internally with `updated_by="telegram:<chat_id>"` — Telegram is a client of the API, not a parallel control path.
 

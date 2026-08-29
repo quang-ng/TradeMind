@@ -125,6 +125,9 @@ async def _handle_entry_fill(session: AsyncSession, payload: FreqtradeWebhookPay
         # no linked Signal is found (e.g. legacy order predating M2).
         market_regime=entry_signal.setup_regime if entry_signal is not None else None,
         trade_score=entry_signal.trade_score if entry_signal is not None else None,
+        volatility_regime=(
+            entry_signal.volatility_regime if entry_signal is not None else None
+        ),
     )
     opened_at = _parse_freqtrade_datetime(payload.open_date)
     if opened_at is not None:

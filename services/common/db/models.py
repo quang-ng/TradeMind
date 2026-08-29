@@ -145,6 +145,12 @@ class Position(Base):
     # before this migration (D5: no retroactive backfill).
     market_regime: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     trade_score: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    # Positive-expectancy plan M4 — denormalized from the entry `Signal`
+    # (`Signal.volatility_regime`, added on `signals` back in M2) at open,
+    # same as `market_regime`/`trade_score` above. Powers the
+    # expectancy-by-volatility breakdown on `GET /performance`. Null for
+    # positions opened before migration `20260829_0001` (D5).
+    volatility_regime: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
 
 
 class AuditEvent(Base):

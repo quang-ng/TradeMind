@@ -61,6 +61,19 @@ describe('Performance view', () => {
           total_r: '3.4', total_pnl_usdt: '18.75', profit_factor: '2.6',
           max_drawdown_pct: '0.012', avg_drawdown_pct: '0.004', total_fees_usdt: '1.20',
           total_slippage_usdt: null, starting_equity_usdt: '5000',
+          breakdowns: {
+            by_regime: [
+              {
+                key: 'trend_pullback', trades: 8, wins: 5, losses: 3, breakeven: 0, trades_with_r: 8,
+                win_rate: '0.625', avg_win_r: '1.5', avg_loss_r: '-0.9', expectancy_r: '0.42',
+                total_r: '3.36', total_pnl_usdt: '15.00', profit_factor: '2.8',
+                max_drawdown_pct: '0.01', avg_drawdown_pct: '0.003', total_fees_usdt: '0.8',
+                total_slippage_usdt: null, starting_equity_usdt: '5000',
+              },
+            ],
+            by_volatility: [],
+            by_score_bucket: [],
+          },
           filters: { symbol: null, regime: null, score_min: null, score_max: null, since: null, until: null },
         }
       }
@@ -76,5 +89,11 @@ describe('Performance view', () => {
     expect(await screen.findByText('Expectancy (R / trade)')).toBeInTheDocument()
     expect(screen.getByText('+0.34R')).toBeInTheDocument()
     expect(screen.getByText('7W · 4L · 1BE')).toBeInTheDocument()
+
+    // M4 breakdown table renders its cohort rows
+    expect(screen.getByText('Expectancy by setup regime')).toBeInTheDocument()
+    expect(screen.getByText('+0.42R')).toBeInTheDocument()
+    // 'trend_pullback' now appears both as a filter option and a cohort row
+    expect(screen.getAllByText('trend_pullback').length).toBeGreaterThan(1)
   })
 })

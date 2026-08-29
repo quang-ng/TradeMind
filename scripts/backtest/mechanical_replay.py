@@ -34,6 +34,7 @@ import argparse
 import asyncio
 import csv
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from itertools import groupby
@@ -41,20 +42,24 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401,I001 -- must patch sys.path before the imports below
 import pandas as pd
+import report as perf_report  # noqa: E402
 from cache import CandleCache  # noqa: E402
 from common.config import LLMServiceSettings, RiskConfig, SchedulerSettings  # noqa: E402
 from common.enums import Action  # noqa: E402
+from common.performance import summarize, summarize_breakdowns  # noqa: E402
 from history import fetch_history, timeframe_to_ms  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from llm_service.app.context.builder import ContextBuilder  # noqa: E402
 from llm_service.app.models.llm import LLMOutput  # noqa: E402
 from llm_service.app.models.wire import AnalyzeRequest  # noqa: E402
+from llm_service.app.scoring.trade_score import TradeScorer  # noqa: E402
 from llm_service.app.strategies.selector import StrategySelector  # noqa: E402
+from llm_service.app.strategies.volatility_classifier import VolatilityClassifier  # noqa: E402
 from llm_service.app.validators.semantic import (  # noqa: E402
     _CONFIRMATION_CATEGORIES,
     validate_signal_semantics,
 )
-from replay import decision_indices, iso, max_drawdown_pct, parse_date  # noqa: E402
+from replay import decision_indices, iso, parse_date  # noqa: E402
 from risk_engine.app.schemas import SignalView  # noqa: E402
 from scheduler.app.indicators import compute_indicators  # noqa: E402
 
@@ -94,12 +99,24 @@ def build_context(
     return ContextBuilder().build(request)
 
 
+@dataclass(frozen=True)
+class MechanicalDecision:
+    action: Action
+    regime: str  # StrategySelector label (StrategyName value)
+    volatility_regime: str  # VolatilityClassifier label (VolatilityRegime value)
+    trade_score: int  # TradeScorer 0-100 total
+    exit_confirmations: tuple[str, ...]
+
+
 def mechanical_decision(
     context,
     settings: LLMServiceSettings,
     suppress_buy_regimes: frozenset[str] = frozenset(),
-):
-    """Returns (final_action, regime, exit_confirmations).
+) -> MechanicalDecision:
+    """Returns the gated action plus the journal dimensions the same
+    `Signal` row carries in production (regime, volatility regime, trade
+    score — positive-expectancy plan M2), so `--trades-out` can be sliced
+    the same way `GET /performance`'s breakdowns slice the live journal.
 
     `suppress_buy_regimes` is an experimental knob, not a production code
     path: it lets a one-off replay test "what if entries were flatly
@@ -122,6 +139,8 @@ def mechanical_decision(
     )
     strategy = StrategySelector().select(context)
     regime = strategy.strategy.value
+    volatility_regime = VolatilityClassifier().classify(context)
+    score = TradeScorer().score(context, strategy, volatility_regime)
     result = validate_signal_semantics(
         context,
         stub_output,
@@ -132,7 +151,13 @@ def mechanical_decision(
     action = result.output.action
     if action == Action.BUY and regime in suppress_buy_regimes:
         action = Action.HOLD
-    return action, regime, result.exit_confirmations
+    return MechanicalDecision(
+        action=action,
+        regime=regime,
+        volatility_regime=volatility_regime.value,
+        trade_score=score.total,
+        exit_confirmations=result.exit_confirmations,
+    )
 
 
 def _reason_text(result) -> str:
@@ -186,8 +211,23 @@ async def run(args: argparse.Namespace) -> None:
         ignore_killswitch=args.ignore_killswitch,
     )
     risk_config = RiskConfig()
+    # symbol -> journal dimension of the currently-open position; moved into
+    # the `trade_*` maps (keyed by (symbol, entry_time_iso)) when it closes.
     entry_regimes: dict[str, str] = {}
+    entry_scores: dict[str, int] = {}
+    entry_volatility: dict[str, str] = {}
     trade_regimes: dict[tuple[str, str], str] = {}  # (symbol, entry_time_iso) -> regime
+    trade_scores: dict[tuple[str, str], int] = {}
+    trade_volatility: dict[tuple[str, str], str] = {}
+
+    def _carry_entry_dims(trade_key: tuple[str, str], symbol: str) -> None:
+        trade_regimes[trade_key] = entry_regimes.pop(symbol, "unknown")
+        score = entry_scores.pop(symbol, None)
+        if score is not None:
+            trade_scores[trade_key] = score
+        volatility = entry_volatility.pop(symbol, None)
+        if volatility is not None:
+            trade_volatility[trade_key] = volatility
 
     if args.trades_out:
         Path(args.trades_out).parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +238,8 @@ async def run(args: argparse.Namespace) -> None:
     if signals_file:
         signals_writer = csv.writer(signals_file)
         signals_writer.writerow(
-            ["timestamp", "symbol", "action", "regime", "outcome", "reason"]
+            ["timestamp", "symbol", "action", "regime", "volatility_regime", "score",
+             "outcome", "reason"]
         )
 
     # (symbol, entry_time_iso) -> exit_confirmations tuple present on the
@@ -215,9 +256,7 @@ async def run(args: argparse.Namespace) -> None:
         for _, symbol, i in group:
             closed = ledger.check_static_exit(symbol, candles_by_symbol[symbol][i], now)
             if closed is not None:
-                trade_regimes[(symbol, closed.entry_time.isoformat())] = entry_regimes.pop(
-                    symbol, "unknown"
-                )
+                _carry_entry_dims((symbol, closed.entry_time.isoformat()), symbol)
 
         for _, symbol, i in group:
             candles = candles_by_symbol[symbol]
@@ -241,9 +280,8 @@ async def run(args: argparse.Namespace) -> None:
                 unrealized_pnl_pct=unrealized_pnl_pct,
                 llm_ohlcv_window=llm_ohlcv_window,
             )
-            action, regime, exit_confirmations = mechanical_decision(
-                context, llm_settings, suppress_buy_regimes
-            )
+            decision = mechanical_decision(context, llm_settings, suppress_buy_regimes)
+            action, regime = decision.action, decision.regime
 
             signal_view = SignalView(
                 id=f"{symbol}-{close_ts}",
@@ -265,6 +303,8 @@ async def run(args: argparse.Namespace) -> None:
                 reason = "" if new_position else _reason_text(result)
                 if new_position:
                     entry_regimes[symbol] = regime
+                    entry_scores[symbol] = decision.trade_score
+                    entry_volatility[symbol] = decision.volatility_regime
             elif action == Action.SELL and symbol in ledger.positions:
                 fill_price = Decimal(str(candles[i + 1]["o"]))
                 entry_time_iso = ledger.positions[symbol].entry_time.isoformat()
@@ -274,12 +314,15 @@ async def run(args: argparse.Namespace) -> None:
                 outcome = "exited" if trade else "rejected"
                 reason = "" if trade else _reason_text(result)
                 if trade:
-                    trade_regimes[(symbol, entry_time_iso)] = entry_regimes.pop(symbol, "unknown")
-                    trade_exit_confirmations[(symbol, entry_time_iso)] = exit_confirmations
+                    _carry_entry_dims((symbol, entry_time_iso), symbol)
+                    trade_exit_confirmations[(symbol, entry_time_iso)] = (
+                        decision.exit_confirmations
+                    )
 
             if signals_writer:
                 signals_writer.writerow(
-                    [now.isoformat(), symbol, action.value, regime, outcome, reason]
+                    [now.isoformat(), symbol, action.value, regime,
+                     decision.volatility_regime, decision.trade_score, outcome, reason]
                 )
 
         processed += len(group)
@@ -297,7 +340,8 @@ async def run(args: argparse.Namespace) -> None:
             writer = csv.writer(f)
             writer.writerow(
                 ["symbol", "entry_time", "exit_time", "entry_price", "exit_price",
-                 "size_usdt", "pnl_usdt", "pnl_pct", "exit_reason", "entry_regime",
+                 "size_usdt", "pnl_usdt", "pnl_pct", "r_multiple", "exit_reason",
+                 "entry_regime", "volatility_regime", "score",
                  "exit_confirmations", "exit_confirmation_categories"]
             )
             for t in ledger.closed_trades:
@@ -311,40 +355,51 @@ async def run(args: argparse.Namespace) -> None:
                         t.entry_price, t.exit_price, t.size_usdt,
                         t.pnl_usdt.quantize(Decimal("0.01")),
                         t.pnl_pct.quantize(Decimal("0.0001")),
+                        "" if t.r_multiple is None else t.r_multiple.quantize(Decimal("0.0001")),
                         t.exit_reason, regime,
+                        trade_volatility.get(key, ""), trade_scores.get(key, ""),
                         "|".join(confirmations), "|".join(categories),
                     ]
                 )
 
     candle_cache.close()
-    print_summary(ledger, candles_by_symbol, trade_regimes)
+    print_summary(ledger, candles_by_symbol, trade_regimes, trade_scores, trade_volatility)
 
 
 def print_summary(
-    ledger: Ledger, candles_by_symbol: dict[str, list[dict]], trade_regimes: dict
+    ledger: Ledger,
+    candles_by_symbol: dict[str, list[dict]],
+    trade_regimes: dict,
+    trade_scores: dict,
+    trade_volatility: dict,
 ) -> None:
     trades = ledger.closed_trades
-    wins = [t for t in trades if t.pnl_usdt > 0]
-    losses = [t for t in trades if t.pnl_usdt <= 0]
-    win_rate = (len(wins) / len(trades) * 100) if trades else 0.0
-    drawdown = max_drawdown_pct(ledger.starting_equity_usdt, trades)
+    metrics = perf_report.metrics_from_closed_trades(
+        trades,
+        regimes=trade_regimes,
+        scores=trade_scores,
+        volatilities=trade_volatility,
+    )
+    # Same equity anchor the offline ledger sizes off; passed explicitly so
+    # `common.performance` computes the identical drawdown curve the live
+    # endpoint would (implementation plan Section 7).
+    anchor = ledger.starting_equity_usdt
+    report = summarize(metrics, starting_equity_usdt=anchor)
+    breakdowns = summarize_breakdowns(metrics, starting_equity_usdt=anchor)
 
-    pnl_of_equity = (
-        ledger.realized_pnl_usdt / ledger.starting_equity_usdt
-        if ledger.starting_equity_usdt
-        else Decimal("0")
-    )
+    pnl_of_equity = report.total_pnl_usdt / anchor if anchor else Decimal("0")
     print("\n=== Mechanical backtest summary ===")
-    print(f"Starting equity: {ledger.starting_equity_usdt} USDT")
+    print(f"Starting equity: {anchor} USDT")
     print(
-        f"Closed trades:   {len(trades)}  "
-        f"(wins={len(wins)} losses={len(losses)} win_rate={win_rate:.1f}%)"
+        f"Closed trades:   {report.trades}  "
+        f"(wins={report.wins} losses={report.losses} breakeven={report.breakeven})"
     )
     print(
-        f"Realized P&L:    {ledger.realized_pnl_usdt:.2f} USDT "
+        f"Realized P&L:    {report.total_pnl_usdt:.2f} USDT "
         f"({pnl_of_equity:.2%} of starting equity)"
     )
-    print(f"Max drawdown:    {drawdown:.2%}")
+    if report.max_drawdown_pct is not None:
+        print(f"Max drawdown:    {report.max_drawdown_pct:.2%}")
     print(f"Killswitch tripped by end of run: {ledger.killswitch_tripped}")
 
     if ledger.positions:
@@ -363,23 +418,8 @@ def print_summary(
     if by_reason:
         print("\nExit reasons:", ", ".join(f"{k}={v}" for k, v in by_reason.items()))
 
-    by_regime: dict[str, list] = {}
-    for t in trades:
-        regime = trade_regimes.get((t.symbol, t.entry_time.isoformat()), "unknown")
-        by_regime.setdefault(regime, []).append(t)
-    if by_regime:
-        print("\n=== By entry regime (Strategy Selector classification) ===")
-        for regime, regime_trades in sorted(by_regime.items(), key=lambda kv: -len(kv[1])):
-            r_wins = [t for t in regime_trades if t.pnl_usdt > 0]
-            r_win_rate = len(r_wins) / len(regime_trades) * 100
-            r_pnl = sum((t.pnl_usdt for t in regime_trades), start=Decimal("0"))
-            avg_pct = sum(
-                (t.pnl_pct for t in regime_trades), start=Decimal("0")
-            ) / len(regime_trades)
-            print(
-                f"  {regime:<22} n={len(regime_trades):<4} win_rate={r_win_rate:5.1f}%  "
-                f"pnl={r_pnl:>8.2f} USDT  avg_pnl_pct={avg_pct:.2%}"
-            )
+    print("\n" + perf_report.render_summary(report))
+    print(perf_report.render_breakdowns(breakdowns))
 
 
 def main() -> None:

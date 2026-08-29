@@ -54,6 +54,7 @@ import type {
   Decision,
   LLMConfig,
   Order,
+  PerformanceCohort,
   PerformanceSummary,
   Position,
   RiskConfig,
@@ -691,9 +692,59 @@ function PerformancePage({ apiKey, symbols }: { apiKey: string; symbols: string[
               <p className="muted">Drawdown needs a live account-equity anchor, which was unavailable at compute time.</p>
             )}
           </Panel>
+
+          <BreakdownTable
+            title="Expectancy by setup regime"
+            subtitle="Strategy Selector classification, within the current filter"
+            rows={summary.breakdowns?.by_regime ?? []}
+          />
+          <BreakdownTable
+            title="Expectancy by volatility regime"
+            subtitle="ATR-relative-to-price bucket at entry, within the current filter"
+            rows={summary.breakdowns?.by_volatility ?? []}
+          />
+          <BreakdownTable
+            title="Expectancy by trade-score bucket"
+            subtitle="0–100 setup-quality rubric at entry, within the current filter"
+            rows={summary.breakdowns?.by_score_bucket ?? []}
+          />
         </>
       )}
     </div>
+  )
+}
+
+function perfToneClass(value: string | null): string {
+  if (value == null) return ''
+  return Number(value) >= 0 ? 'positive-text' : 'negative-text'
+}
+
+function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: string; rows: PerformanceCohort[] }) {
+  return (
+    <Panel title={title} subtitle={subtitle}>
+      {rows.length === 0 ? (
+        <EmptyTable text="No closed trades carry this dimension yet." />
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <thead><tr><th>Cohort</th><th>Trades</th><th>Win rate</th><th>Expectancy R</th><th>Total R</th><th>P&L</th><th>Profit factor</th></tr></thead>
+            <tbody>
+              {rows.map((cohort) => (
+                <tr key={cohort.key}>
+                  <td>{cohort.key}</td>
+                  <td className="mono">{cohort.trades}</td>
+                  <td className="mono">{cohort.win_rate === null ? '—' : percent(cohort.win_rate)}</td>
+                  <td className={`mono ${perfToneClass(cohort.expectancy_r)}`}>{rMultiple(cohort.expectancy_r)}</td>
+                  <td className={`mono ${perfToneClass(cohort.total_r)}`}>{rMultiple(cohort.total_r)}</td>
+                  <td className={`mono ${perfToneClass(cohort.total_pnl_usdt)}`}>{money(cohort.total_pnl_usdt)}</td>
+                  <td className="mono">{cohort.profit_factor === null ? '—' : compactNumber(cohort.profit_factor, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   )
 }
 

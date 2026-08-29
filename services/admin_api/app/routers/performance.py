@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from common import redis_keys
 from common.account_balance import AccountBalanceSnapshot
-from common.performance import summarize
+from common.performance import summarize, summarize_breakdowns
 from common.performance_query import load_closed_trade_metrics
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import ValidationError
@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import require_api_key
 from ..deps import get_db_session, get_redis_client
-from ..schemas import PerformanceFilters, PerformanceSummary
+from ..schemas import (
+    PerformanceBreakdowns,
+    PerformanceCohort,
+    PerformanceFilters,
+    PerformanceSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +81,24 @@ async def get_performance(
         until=until,
     )
     balance = await _resolve_equity_anchor(redis_client)
-    report = summarize(
-        trades,
-        starting_equity_usdt=balance.equity_usdt if balance is not None else None,
-    )
+    anchor = balance.equity_usdt if balance is not None else None
+    report = summarize(trades, starting_equity_usdt=anchor)
+    breakdowns = summarize_breakdowns(trades, starting_equity_usdt=anchor)
     return PerformanceSummary(
         **vars(report),
+        breakdowns=PerformanceBreakdowns(
+            by_regime=[
+                PerformanceCohort(key=c.key, **vars(c.report)) for c in breakdowns.by_regime
+            ],
+            by_volatility=[
+                PerformanceCohort(key=c.key, **vars(c.report))
+                for c in breakdowns.by_volatility
+            ],
+            by_score_bucket=[
+                PerformanceCohort(key=c.key, **vars(c.report))
+                for c in breakdowns.by_score_bucket
+            ],
+        ),
         filters=PerformanceFilters(
             symbol=symbol,
             regime=regime,

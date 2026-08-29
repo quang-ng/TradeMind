@@ -46,6 +46,11 @@ class SimPosition:
     # actually drives check_static_exit below rather than being audit-only.
     peak_price: Decimal  # trade's high-water mark since entry — mirrors
     # freqtrade's Trade.max_rate, used for the trailing-stop check below.
+    # Positive-expectancy plan M4: `evaluate()`'s post-clamp 1R for this
+    # trade (`risk_engine` `RiskResult.actual_risk_usdt`, D1), carried so
+    # `_record_close` can compute `r_multiple`. `None` only if the entry
+    # somehow bypassed sizing (test fixtures that build SimPosition directly).
+    actual_risk_usdt: Decimal | None = None
 
 
 @dataclass
@@ -59,6 +64,12 @@ class ClosedTrade:
     pnl_usdt: Decimal
     pnl_pct: Decimal
     exit_reason: str
+    # Positive-expectancy plan M4: `pnl_usdt / actual_risk_usdt`, the same
+    # R-multiple definition the live path persists on `Position.r_multiple`
+    # (M1). `None` when `actual_risk_usdt` is missing or non-positive, so
+    # `common.performance` excludes it from R metrics exactly as it does a
+    # legacy live row.
+    r_multiple: Decimal | None = None
 
 
 @dataclass
@@ -137,6 +148,11 @@ class Ledger:
         proceeds = position.size_base * exit_price * (1 - self.fee_pct - self.slippage_pct)
         pnl_usdt = proceeds - position.size_usdt
         pnl_pct = pnl_usdt / position.size_usdt if position.size_usdt > 0 else Decimal("0")
+        r_multiple = (
+            pnl_usdt / position.actual_risk_usdt
+            if position.actual_risk_usdt is not None and position.actual_risk_usdt > 0
+            else None
+        )
 
         trade = ClosedTrade(
             symbol=position.symbol,
@@ -148,6 +164,7 @@ class Ledger:
             pnl_usdt=pnl_usdt,
             pnl_pct=pnl_pct,
             exit_reason=reason,
+            r_multiple=r_multiple,
         )
         self.closed_trades.append(trade)
         self.realized_pnl_usdt += pnl_usdt
@@ -271,6 +288,7 @@ class Ledger:
             size_base=size_base,
             stop_loss_price=result.stop_loss_price,
             peak_price=fill_price,
+            actual_risk_usdt=result.actual_risk_usdt,
         )
         self.positions[symbol] = position
         return result, position

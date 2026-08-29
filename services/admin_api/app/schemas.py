@@ -182,10 +182,9 @@ class PerformanceFilters(BaseModel):
     until: datetime | None = None
 
 
-class PerformanceSummary(BaseModel):
-    """PROJECT.md Section 11 `GET /performance`. R is the primary normalized
-    unit (implementation plan Section 4, M3 / D1: `r_multiple` denominator
-    is `RiskDecision.actual_risk_usdt`).
+class PerformanceMetrics(BaseModel):
+    """The M3 metric set over one cohort of closed trades — mirrors
+    `common.performance.PerformanceReport` field-for-field.
 
     `*_r` and `*_drawdown_pct` are nullable: a trade whose entry decision
     predates M1 has no `r_multiple` and is excluded from every R metric
@@ -212,6 +211,33 @@ class PerformanceSummary(BaseModel):
     total_fees_usdt: Decimal
     total_slippage_usdt: Decimal | None
     starting_equity_usdt: Decimal | None
+
+
+class PerformanceCohort(PerformanceMetrics):
+    """One row of a `PerformanceBreakdowns` list — the full metric set over
+    just the closed trades sharing one dimension value (`key`)."""
+
+    key: str
+
+
+class PerformanceBreakdowns(BaseModel):
+    """Positive-expectancy plan M4 — `GET /performance` recomputed per
+    distinct value of each journal dimension, over the same filtered
+    cohort. Rows ordered by descending trade count, the catch-all
+    `"(unclassified)"`/`"(unscored)"` cohort last."""
+
+    by_regime: list[PerformanceCohort]
+    by_volatility: list[PerformanceCohort]
+    by_score_bucket: list[PerformanceCohort]
+
+
+class PerformanceSummary(PerformanceMetrics):
+    """PROJECT.md Section 11 `GET /performance`. R is the primary normalized
+    unit (implementation plan Section 4, M3 / D1: `r_multiple` denominator
+    is `RiskDecision.actual_risk_usdt`); `breakdowns` slices the same cohort
+    by setup regime / volatility regime / score bucket (M4)."""
+
+    breakdowns: PerformanceBreakdowns
     filters: PerformanceFilters
 
 
