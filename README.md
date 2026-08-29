@@ -1,212 +1,503 @@
 # TradeMind
 
-TradeMind is a self-hosted, AI-assisted cryptocurrency trading platform designed around a simple safety principle:
-
 > **The LLM proposes. The Risk Engine disposes.**
 
-The Large Language Model (LLM) analyzes market data and suggests `BUY`, `SELL`, or `HOLD`. It cannot access exchange credentials, execute orders, or determine position size. Every signal is independently checked by a deterministic Risk Engine before an approved order can reach Freqtrade.
+AI-assisted cryptocurrency trading system built around **deterministic risk controls, auditable decisions, and measurable trading performance**.
 
-> [!IMPORTANT]
-> TradeMind is currently a **draft MVP specification**, not a production-ready trading system. The MVP is limited to Binance Spot, a configurable symbol set (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT — see `SYMBOLS`), closed 5-minute candles, long-only positions, and dry-run execution.
+TradeMind separates market analysis from trade execution: the LLM can propose a trade, but a deterministic Risk Engine decides whether that trade is allowed.
+
+> ⚠️ **Experimental / Dry-run only.** TradeMind is not production-ready and should not be used with real funds.
+
+---
 
 ## Why TradeMind?
 
-AI can help identify patterns in market data, but probabilistic model output should not have direct control over funds. TradeMind separates analysis from execution so that:
+Most AI trading experiments follow a simple path:
 
-- the LLM has no exchange access or sizing authority;
-- deterministic risk rules make the final decision;
-- failures and uncertain model output default to `HOLD`;
-- every signal, decision, order, and state change is auditable; and
-- a human operator can stop new entries with a global kill switch.
+```text
+Market → LLM → BUY → Execute
+```
+
+TradeMind introduces a hard boundary between **AI reasoning** and **financial execution**:
+
+```text
+Market Data
+     ↓
+LLM Analysis
+     ↓
+Structured Signal
+     ↓
+Risk Engine
+     ↓
+Approved / Rejected
+     ↓
+Freqtrade
+     ↓
+Trade
+     ↓
+Journal
+     ↓
+Performance
+```
+
+The LLM provides a **hypothesis**.
+
+The Risk Engine decides whether that hypothesis is allowed to become a trade.
+
+---
 
 ## Architecture
 
-TradeMind separates components into three trust zones:
-
 ```mermaid
 flowchart LR
-    subgraph Isolated[Isolated Zone]
-        LLM[LLM Analysis Service]
+    Market[Market Data] --> Scheduler
+
+    subgraph AI["AI Zone"]
+        LLM[LLM Analysis]
     end
 
-    subgraph Core[Core Trading Zone]
+    subgraph Core["Trading Core"]
         Scheduler[Scheduler]
         Risk[Risk Engine]
         Freqtrade[Freqtrade]
     end
 
-    subgraph Admin[Administration Zone]
-        API[Admin API]
-        Console[React Operator Console]
-        Telegram[Telegram Notifier]
+    subgraph Data["Data"]
+        DB[(PostgreSQL)]
+        Redis[(Redis)]
     end
 
-    Binance[(Binance Spot)]
-    Redis[(Redis)]
-    Postgres[(PostgreSQL)]
+    subgraph Console["Operator Console"]
+        API[Admin API]
+        FE[React Console]
+    end
 
-    Binance --> Scheduler
+    Binance[Binance Spot]
+
     Scheduler --> LLM
+    LLM --> Scheduler
+
     Scheduler --> Redis
     Redis --> Risk
+
     Risk --> Freqtrade
     Freqtrade --> Binance
-    Scheduler --> Postgres
-    Risk --> Postgres
-    API --> Postgres
+
+    Scheduler --> DB
+    Risk --> DB
+
+    API --> DB
     API --> Redis
-    Console --> API
-    Risk --> Telegram
-    API --> Telegram
+    FE --> API
 ```
 
-- **Isolated Zone:** analyzes supplied market context only. It has no Binance or Freqtrade credentials, no account balance data, and no execution path.
-- **Core Trading Zone:** schedules analysis, applies risk rules, calculates position size and stop-loss values, and sends approved orders to Freqtrade.
-- **Administration Zone:** exposes system status and controls, records Freqtrade webhooks, and sends Telegram notifications. It never places trades directly.
-- **Operator console:** provides a browser view of equity, P&L, signals, decisions, orders, positions, audit traces, and risk controls. It only calls the authenticated Admin API and has no direct execution path.
+### Trust boundaries
 
-PostgreSQL is the durable audit system of record. Redis is used only for coordination, streams, locks, idempotency, cached state, and the kill-switch flag.
+| Component     | Responsibility           | Can execute trades? |
+| ------------- | ------------------------ | ------------------: |
+| LLM           | Market analysis          |                   ❌ |
+| Scheduler     | Data & orchestration     |                   ❌ |
+| Risk Engine   | Risk validation & sizing |                   ❌ |
+| Freqtrade     | Order execution          |                   ✅ |
+| Admin API     | Monitoring & control     |                   ❌ |
+| React Console | Operator interface       |                   ❌ |
 
-## Trading flow
+The LLM and Risk Engine do not have direct access to exchange credentials.
 
-For each supported pair, one cycle runs after a 5-minute candle closes:
+---
 
-1. The Scheduler obtains a per-symbol lock and fetches closed candle data.
-2. Indicators such as RSI, EMA, MACD, ATR, and volume averages are calculated.
-3. The LLM returns a structured `BUY`, `SELL`, or `HOLD` opinion with confidence and reasoning.
-4. The signal is persisted to PostgreSQL and published through Redis.
-5. The Risk Engine checks the kill switch first, then evaluates freshness, confidence, exposure, losses, cooldowns, balance, and other limits.
-6. If every rule passes, the Risk Engine calculates position size and stop-loss values using fixed-point arithmetic.
-7. Freqtrade submits the approved order in dry-run mode and reports order and position updates for auditing.
+## Operator Console
 
-Malformed responses, timeouts, unavailable dependencies, or ambiguous signals fail closed: no new trade is approved.
+The React operator console provides a single place to observe and operate the system.
 
-## Checking system state
+![TradeMind Operator Console](docs/images/dashboard.png)
 
-All examples assume `.env` is populated (see [DEPLOYMENT.md](DEPLOYMENT.md)) and the stack is running via `docker compose up -d`. Export the credentials once per shell session:
+The console currently provides visibility into:
+
+* System health
+* Market signals
+* Risk decisions
+* Trades and positions
+* Trade history
+* Performance
+* Risk controls
+* Audit information
+* LLM analysis
+
+The UI is intentionally designed as an **operator console**, not a consumer trading dashboard.
+
+---
+
+## Trading Lifecycle
+
+A typical trading cycle looks like this:
+
+```text
+┌──────────────┐
+│ Market Data  │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ LLM Analysis │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│   Signal     │
+│ BUY/SELL/HOLD│
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Risk Engine  │
+└──────┬───────┘
+       │
+   ┌───┴────┐
+   ↓        ↓
+APPROVE    REJECT
+   ↓        ↓
+Freqtrade  HOLD
+   ↓
+Position
+   ↓
+Trade Journal
+   ↓
+Performance
+```
+
+The Risk Engine validates the signal before any order can be executed.
+
+---
+
+## Risk First
+
+TradeMind uses deterministic rules for the parts of trading that should not depend on an LLM.
+
+The Risk Engine controls:
+
+* Position sizing
+* Stop loss
+* Risk per trade
+* Exposure limits
+* Confidence thresholds
+* Cooldowns
+* Loss limits
+* Kill switch
+* Duplicate protection
+* Stale signal protection
+
+If required information is missing or a safety check fails:
+
+```text
+LLM timeout
+Invalid signal
+Stale market data
+Risk violation
+System dependency failure
+        ↓
+       HOLD
+```
+
+**Fail closed.**
+
+---
+
+## Trade Journal
+
+TradeMind records the complete lifecycle of a trade rather than only its final P&L.
+
+![TradeMind Trades](docs/images/trades.png)
+
+A trade can include:
+
+```text
+Trade
+├── Market
+├── Side
+├── Setup regime
+├── Volatility regime
+├── Trade score
+├── Risk
+├── Entry
+├── Stop Loss
+├── Take Profit
+├── Exit
+├── Fees
+├── Exit reason
+└── R multiple
+```
+
+This makes each trade observable and auditable.
+
+### Trade Score
+
+Signals can be scored from **0–100** using deterministic factors such as:
+
+* Trend
+* Momentum
+* Volume
+* Market regime
+* Risk / Reward
+* Volatility
+
+The score breakdown is persisted with the trade so the decision can be inspected later.
+
+---
+
+## Performance
+
+TradeMind focuses on **risk-normalized performance**, not just raw P&L.
+
+Key metrics include:
+
+```text
+Win Rate
+Expectancy
+Total R
+Profit Factor
+Drawdown
+Average Win / Loss
+```
+
+The goal is to answer:
+
+> **Does the strategy actually have an edge?**
+
+rather than simply:
+
+> Did the last trade make money?
+
+---
+
+## Core Principles
+
+### AI proposes, deterministic systems decide
+
+LLMs are useful for market interpretation, but they should not directly control capital.
+
+### Fail closed
+
+When the system cannot safely validate a trade, the default action is `HOLD`.
+
+### Auditable by default
+
+Signals, risk decisions, trades, and outcomes are persisted for later inspection.
+
+### Measure before scaling
+
+A strategy should demonstrate positive expectancy through backtesting, walk-forward validation, and paper trading before real capital is considered.
+
+---
+
+## Current MVP
+
+| Area           | Current                 |
+| -------------- | ----------------------- |
+| Exchange       | Binance Spot            |
+| Execution      | Freqtrade               |
+| Execution Mode | Dry-run                 |
+| Timeframe      | Closed 5-minute candles |
+| Position Mode  | Long-only               |
+| Storage        | PostgreSQL + Redis      |
+| Backend        | Python / FastAPI        |
+| Frontend       | React / TypeScript      |
+| Deployment     | Docker Compose          |
+| Notifications  | Telegram                |
+
+### Current limitations
+
+* Dry-run only
+* Long positions only
+* Single exchange
+* Single configured LLM provider
+* Experimental strategy
+* Not production-ready
+
+---
+
+## Tech Stack
+
+### Backend
+
+* Python
+* FastAPI
+* PostgreSQL
+* Redis
+
+### Trading
+
+* Freqtrade
+* Binance Spot
+
+### Frontend
+
+* React
+* TypeScript
+
+### Infrastructure
+
+* Docker Compose
+* Nginx
+
+### AI
+
+* Configurable LLM provider
+
+### Notifications
+
+* Telegram
+
+---
+
+## Project Structure
+
+```text
+TradeMind/
+├── services/
+│   ├── llm_service/       # LLM market analysis
+│   ├── scheduler/         # Market data & scheduling
+│   ├── risk_engine/       # Deterministic risk controls
+│   ├── admin_api/         # Monitoring & administration
+│   ├── notifier/          # Notifications
+│   └── common/            # Shared models & configuration
+│
+├── frontend/              # React operator console
+├── freqtrade/             # Trading execution
+│
+├── docs/
+│   └── images/             # README screenshots
+│
+├── PROJECT.md             # Architecture & requirements
+├── DEPLOYMENT.md          # Deployment & operations
+└── AGENTS.md              # Coding-agent guidance
+```
+
+---
+
+## Quick Start
+
+### Requirements
+
+* Docker
+* Docker Compose
+* Binance API configuration
+* LLM provider API key
+
+### Run
 
 ```bash
-set -a; source .env; set +a
+git clone https://github.com/quang-ng/TradeMind.git
+cd TradeMind
+
+cp .env.example .env
+# Configure .env
+
+docker compose up -d
 ```
 
-### Operator console (port 3000)
+Open the operator console:
 
-Open `http://127.0.0.1:3000` and enter the configured `ADMIN_API_KEY`. The key
-is retained only for the current browser session. The console provides:
-
-- overall equity, daily and realized P&L, exposure, pair status, and cycle freshness;
-- every LLM signal, confidence score, reasoning, raw response, and corresponding risk decision;
-- the complete order ledger and open/closed position history;
-- a chronological audit drawer for any trading-cycle `trace_id`;
-- editable, audited risk configuration and manual analysis-cycle triggers; and
-- the global kill switch, with a mandatory reason recorded in the audit trail.
-
-The console and Admin API bind to host loopback by default. Use a VPN or TLS
-reverse proxy for remote access; do not publish either service directly to
-the internet.
-
-For temporary public-IP access during dry-run evaluation, the repository also
-contains `docker-compose.public.yml`. It exposes only the frontend at
-`http://VPS_PUBLIC_IP:3000`; see [DEPLOYMENT.md](DEPLOYMENT.md) for the full
-command, firewall checks, and the plain-HTTP security warning.
-
-### Admin API (port 8000)
-
-```bash
-# overall status: killswitch, equity, open positions, last cycle per pair
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" http://127.0.0.1:8000/status
-
-# every signal the system generated
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/signals?limit=20"
-
-# every risk decision — approved or rejected, with the reason
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/decisions?limit=20"
-
-# every order (submitted/filled/failed/cancelled); filter by symbol/status
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/orders?limit=20"
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/orders?symbol=BTC/USDT&status=FAILED"
-
-# open/closed positions
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/positions?status=open"
-
-# full timeline for one trading cycle (signal -> decision -> order -> position)
-curl -sS -H "Authorization: Bearer ${ADMIN_API_KEY}" "http://127.0.0.1:8000/audit?trace_id=<uuid>"
-
-# manually trigger a cycle out-of-band (still subject to all risk rules)
-curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" http://127.0.0.1:8000/cycles/BTC-USDT/trigger
-
-# kill switch
-curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" -H "Content-Type: application/json" \
-  -d '{"reason": "manual review"}' http://127.0.0.1:8000/killswitch/enable
-curl -sS -X POST -H "Authorization: Bearer ${ADMIN_API_KEY}" -H "Content-Type: application/json" \
-  -d '{"reason": "resuming"}' http://127.0.0.1:8000/killswitch/disable
+```text
+http://127.0.0.1:3000
 ```
 
-### Freqtrade API (port 8080, direct)
+Admin API:
 
-Freqtrade's own trade database is not the audit system of record (PROJECT.md Section 7) — use these for raw/direct inspection, but the admin API above is authoritative.
-
-```bash
-curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/ping
-curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/balance
-curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/status
-curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/trades
-curl -sS -u "${FREQTRADE_API_USER}:${FREQTRADE_API_PASS}" http://127.0.0.1:8080/api/v1/profit
+```text
+http://127.0.0.1:8000
 ```
 
-More monitoring commands (logs, Postgres queries, Redis checks, backups) are in [DEPLOYMENT.md](DEPLOYMENT.md).
+For detailed setup and operational instructions, see:
 
-## MVP scope
+* `DEPLOYMENT.md`
+* `PROJECT.md`
 
-| Area | MVP choice |
-|---|---|
-| Exchange | Binance Spot |
-| Pairs | Configurable via `SYMBOLS` (default: BTC/USDT, ETH/USDT, BNB/USDT, USDC/USDT) |
-| Timeframe | Closed 5-minute candles |
-| Position type | Long-only spot |
-| Execution | Freqtrade, dry-run only |
-| Analysis | One configured LLM provider |
-| Storage | PostgreSQL and Redis |
-| Operator interfaces | React console, FastAPI admin API, and Telegram |
-| Deployment | Self-hosted with Docker Compose |
+---
 
-Live funds, leverage, shorting, multiple exchanges, additional pairs or timeframes, model ensembles, and multi-user/public applications are intentionally outside the MVP.
+## Roadmap
 
-## Safety guarantees
+```text
+M1  Risk & R
+ ↓
+M2  Trade Journal
+ ↓
+M3  Performance
+ ↓
+M4  Regime Analysis
+ ↓
+M5  Historical Edge
+ ↓
+M6  Backtest & Walk-forward Validation
+```
 
-- The LLM cannot call Binance or Freqtrade.
-- Every actionable signal must pass through the Risk Engine.
-- The kill switch is always evaluated before any other risk rule.
-- Position sizing is owned exclusively by the Risk Engine.
-- Approved entries always include a stop loss.
-- Duplicate candles and redelivered signals cannot create duplicate orders.
-- If PostgreSQL, Redis, the LLM service, or execution dependencies fail, the system does not approve a new trade.
-- All MVP orders remain in dry-run mode unless a human explicitly changes the project scope and configuration.
+### M1 — Risk & R
 
-## Planned components
+* Risk-per-trade
+* Position sizing
+* Stop-loss validation
+* R multiple
 
-The proposed monorepo contains:
+### M2 — Trade Journal
 
-- `services/llm_service` — structured market analysis and safe `HOLD` fallback;
-- `services/scheduler` — closed-candle scheduling, market data, and indicators;
-- `services/risk_engine` — deterministic rules, sizing, and execution authorization;
-- `services/admin_api` — status, audit, configuration, kill-switch, and webhook APIs;
-- `services/notifier` — Telegram event notifications;
-- `services/common` — shared typed models, configuration, database code, and Redis keys; and
-- `frontend` — React/TypeScript single-operator console served through Nginx; and
-- `freqtrade` — dry-run order execution with no autonomous entry strategy.
+* Complete trade lifecycle
+* Trade scoring
+* Market regime
+* Volatility regime
+* Exit reason
+* Fees
+* R-normalized outcomes
 
-Implementation is planned in phases: foundations, data and LLM integration, Risk Engine, dry-run execution, administration and notifications, then hardening and scheduling.
+### M3 — Performance
 
-## Project status
+* Expectancy
+* Profit factor
+* Drawdown
+* R-based performance
 
-All services described above are implemented and run via Docker Compose (see [DEPLOYMENT.md](DEPLOYMENT.md) for first-deployment steps). PROJECT.md Section 13's remaining acceptance item is operational, not code: a 72-hour unattended dry run with a fully consistent audit trail.
+### M4 — Regime Analysis
 
-Read [PROJECT.md](PROJECT.md) for the complete architecture, contracts, risk rules, API design, development phases, and acceptance criteria. Contributors and coding agents should also read [AGENTS.md](AGENTS.md) before making changes.
+* Performance by market regime
+* Setup analysis
+* Trade score analysis
 
-Deployment, backup, and operational monitoring commands are documented in
-[DEPLOYMENT.md](DEPLOYMENT.md).
+### M5 — Historical Edge
 
-## Disclaimer
+* Historical expectancy
+* Setup validation
+* Statistical edge detection
 
-TradeMind is an experimental software project, not financial advice. Cryptocurrency trading involves substantial risk. The MVP is explicitly designed for simulated dry-run execution and should not be used with real funds.
+### M6 — Validation
+
+```text
+Backtest
+   ↓
+Walk-forward
+   ↓
+Paper Trading
+   ↓
+Small Capital
+   ↓
+Production
+```
+
+---
+
+## Documentation
+
+* **[PROJECT.md](PROJECT.md)** — Architecture, system contracts, risk rules and requirements
+* **[DEPLOYMENT.md](DEPLOYMENT.md)** — Deployment and operations
+* **[AGENTS.md](AGENTS.md)** — Development guidance for coding agents
+
+---
+
+## Safety
+
+TradeMind is an experimental software project and **not financial advice**.
+
+Cryptocurrency trading involves substantial financial risk.
+
+The current system is designed for **dry-run execution** and should not be used with real funds.
+
+---
+
+## License
+
+See [LICENSE](LICENSE).
