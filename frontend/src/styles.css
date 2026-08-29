@@ -135,6 +135,7 @@ tbody tr:hover { background: #12201c; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
 .row-button { border: 0; width: 29px; height: 29px; display: grid; place-items: center; color: var(--muted); border-radius: 7px; background: transparent; cursor: pointer; }
 .row-button:hover { color: var(--green); background: #1b2c27; }
+.clickable-row { cursor: pointer; }
 .sub-cell { display: block; margin-top: 4px; color: var(--muted-2); }
 .badge { width: fit-content; display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 5px; font-size: 8px; font-weight: 700; letter-spacing: .35px; text-transform: uppercase; }
 .badge.large { padding: 6px 9px; font-size: 9px; }

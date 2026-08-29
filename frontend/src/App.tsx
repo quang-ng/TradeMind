@@ -46,7 +46,7 @@ import {
   updateLLMConfig,
   updateRiskConfig,
 } from './api'
-import { compactNumber, dateTime, money, percent, readable, rMultiple, shortId, timeAgo } from './format'
+import { compactNumber, dateTime, duration, money, percent, readable, rMultiple, shortId, timeAgo } from './format'
 import type {
   Action,
   AuditTimeline,
@@ -61,14 +61,13 @@ import type {
   Signal,
 } from './types'
 
-type Page = 'overview' | 'signals' | 'orders' | 'positions' | 'performance' | 'risk' | 'llm'
+type Page = 'overview' | 'signals' | 'trades' | 'performance' | 'risk' | 'llm'
 type Detail = { kind: 'trace'; id: string } | { kind: 'signal'; id: string } | null
 
 const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'signals', label: 'Signals & decisions', icon: SignalIcon },
-  { id: 'orders', label: 'Orders', icon: ClipboardList },
-  { id: 'positions', label: 'Positions & P&L', icon: WalletCards },
+  { id: 'trades', label: 'Trades', icon: WalletCards },
   { id: 'performance', label: 'Performance', icon: BarChart3 },
   { id: 'risk', label: 'Risk controls', icon: SlidersHorizontal },
   { id: 'llm', label: 'LLM engine', icon: Bot },
@@ -190,7 +189,9 @@ export default function App() {
             >
               <item.icon size={19} strokeWidth={1.8} />
               <span>{item.label}</span>
-              {item.id === 'orders' && data.orders.length > 0 && <small>{data.orders.length}</small>}
+              {item.id === 'trades' && data.positions.some((position) => position.status === 'OPEN') && (
+                <small>{data.positions.filter((position) => position.status === 'OPEN').length}</small>
+              )}
             </button>
           ))}
         </nav>
@@ -249,8 +250,7 @@ export default function App() {
         <div className="page-content">
           {page === 'overview' && <Overview data={data} onTrace={(id) => setDetail({ kind: 'trace', id })} onNavigate={setPage} />}
           {page === 'signals' && <SignalsPage data={data} onDetail={setDetail} />}
-          {page === 'orders' && <OrdersPage orders={data.orders} onTrace={(id) => setDetail({ kind: 'trace', id })} />}
-          {page === 'positions' && <PositionsPage positions={data.positions} />}
+          {page === 'trades' && <TradesPage data={data} onTrace={(id) => setDetail({ kind: 'trace', id })} />}
           {page === 'performance' && (
             <PerformancePage apiKey={apiKey} symbols={Object.keys(data.status.pairs)} />
           )}
@@ -518,61 +518,329 @@ function SignalCard({ signal, decision, order, onDetail }: { signal: Signal; dec
   )
 }
 
-function OrdersPage({ orders, onTrace }: { orders: Order[]; onTrace: (id: string) => void }) {
-  const [status, setStatus] = useState('ALL')
+interface Trade {
+  position: Position
+  entryOrder?: Order
+  exitOrder?: Order
+  decision?: Decision
+  signal?: Signal
+  orders: Order[]
+  setupRegime: string | null
+  volatilityRegime: string | null
+  tradeScore: number | null
+  scoreBreakdown: Record<string, number> | null
+  traceId?: string
+}
+
+// One row per position — the complete trading lifecycle. Each Position is
+// joined back through its entry Order -> RiskDecision -> Signal so setup
+// score, risk sizing and execution detail all hang off a single record.
+// M2 fields denormalized onto the Position win over the Signal's copy; a
+// position opened before that migration (or whose signal has scrolled out
+// of the loaded window) simply has nulls, which every cell renders as "—".
+function buildTrades(data: DashboardData): Trade[] {
+  const orderById = new Map(data.orders.map((order) => [order.id, order]))
+  const decisionById = new Map(data.decisions.map((decision) => [decision.id, decision]))
+  const signalById = new Map(data.signals.map((signal) => [signal.id, signal]))
+  return data.positions.map((position) => {
+    const entryOrder = orderById.get(position.entry_order_id)
+    const exitOrder = position.exit_order_id ? orderById.get(position.exit_order_id) : undefined
+    const decision = entryOrder ? decisionById.get(entryOrder.risk_decision_id) : undefined
+    const signal = decision ? signalById.get(decision.signal_id) : undefined
+    const orders = [entryOrder, exitOrder].filter((order): order is Order => Boolean(order))
+    return {
+      position,
+      entryOrder,
+      exitOrder,
+      decision,
+      signal,
+      orders,
+      setupRegime: position.market_regime ?? signal?.setup_regime ?? null,
+      volatilityRegime: signal?.volatility_regime ?? null,
+      tradeScore: position.trade_score ?? signal?.trade_score ?? null,
+      scoreBreakdown: signal?.score_breakdown ?? null,
+      traceId: entryOrder?.trace_id ?? signal?.trace_id,
+    }
+  })
+}
+
+function TradesPage({ data, onTrace }: { data: DashboardData; onTrace: (id: string) => void }) {
   const [symbol, setSymbol] = useState('ALL')
-  // Derived from the loaded orders rather than a fixed list, so the filter
-  // always matches whichever symbols SYMBOLS actually has configured.
-  const symbolOptions = ['ALL', ...Array.from(new Set(orders.map((order) => order.symbol))).sort()]
-  const filtered = orders.filter((order) => (status === 'ALL' || order.status === status) && (symbol === 'ALL' || order.symbol === symbol))
-  const volume = orders.reduce(
-    (sum, order) => sum + Number(order.filled_amount ?? 0) * Number(order.avg_price ?? 0),
-    0,
+  const [statusFilter, setStatusFilter] = useState('ALL')
+  const [regime, setRegime] = useState('ALL')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  const trades = buildTrades(data)
+  const symbolOptions = ['ALL', ...Array.from(new Set(trades.map((trade) => trade.position.symbol))).sort()]
+  const regimeOptions = [
+    'ALL',
+    ...Array.from(new Set(trades.map((trade) => trade.setupRegime).filter((value): value is string => Boolean(value)))).sort(),
+  ]
+  const filtered = trades.filter(
+    (trade) =>
+      (symbol === 'ALL' || trade.position.symbol === symbol) &&
+      (statusFilter === 'ALL' || trade.position.status === statusFilter) &&
+      (regime === 'ALL' || trade.setupRegime === regime),
   )
+
+  const open = trades.filter((trade) => trade.position.status === 'OPEN')
+  const closed = trades.filter((trade) => trade.position.status === 'CLOSED')
+  const realized = closed.reduce((sum, trade) => sum + Number(trade.position.pnl_usdt ?? 0), 0)
+  const winners = closed.filter((trade) => Number(trade.position.pnl_usdt ?? 0) > 0).length
+  const activeTrade = selectedId ? trades.find((trade) => trade.position.id === selectedId) ?? null : null
+
   return (
     <div className="page-stack">
-      <section className="mini-metrics">
-        <MetricCard label="Total orders" value={String(orders.length)} note={`${orders.filter((o) => o.status === 'FILLED').length} filled`} icon={<ClipboardList />} />
-        <MetricCard label="Filled notional" value={money(volume)} note="Across loaded order history" icon={<CircleDollarSign />} />
-        <MetricCard label="Execution issues" value={String(orders.filter((o) => o.status === 'FAILED' || o.status === 'CANCELLED').length)} note="Failed or cancelled" icon={<AlertTriangle />} tone={orders.some((o) => o.status === 'FAILED') ? 'negative' : undefined} />
+      <section className="section-intro">
+        <div>
+          <h2>Trades</h2>
+          <p>One row per position — the complete lifecycle from setup score through risk sizing, execution and outcome. Aggregate statistics live on the Performance page.</p>
+        </div>
       </section>
-      <Panel title="Order ledger" subtitle="Authoritative TradeMind order records—not Freqtrade’s internal database">
-        <div className="panel-filters"><Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} /><Filter label="Status" value={status} onChange={setStatus} options={['ALL', 'SUBMITTED', 'FILLED', 'FAILED', 'CANCELLED']} /></div>
+
+      <section className="mini-metrics">
+        <MetricCard label="Open positions" value={String(open.length)} note="Long-only spot positions" icon={<Activity />} />
+        <MetricCard
+          label="Realized P&L"
+          value={money(realized)}
+          note={`${closed.length} closed trade${closed.length === 1 ? '' : 's'}`}
+          icon={<CircleDollarSign />}
+          tone={realized >= 0 ? 'positive' : 'negative'}
+        />
+        <MetricCard
+          label="Win rate"
+          value={closed.length ? percent(winners / closed.length) : '—'}
+          note={`${winners} profitable close${winners === 1 ? '' : 's'}`}
+          icon={<TrendingUp />}
+        />
+      </section>
+
+      <div className="filters">
+        <Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} />
+        <Filter label="Status" value={statusFilter} onChange={setStatusFilter} options={['ALL', 'OPEN', 'CLOSED']} />
+        <Filter label="Setup regime" value={regime} onChange={setRegime} options={regimeOptions} />
+        <span className="result-count">{filtered.length} trade{filtered.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <Panel title="Trade ledger" subtitle="Newest first · select a row for the full setup, risk and execution breakdown">
         <div className="table-scroll">
-          <table><thead><tr><th>Order</th><th>Market</th><th>Side</th><th>Status</th><th>Requested amount</th><th>Filled amount</th><th>Average price</th><th>Time</th><th /></tr></thead>
-            <tbody>{filtered.map((order) => <tr key={order.id}>
-              <td className="mono"><span title={order.id}>{shortId(order.id)}</span>{order.freqtrade_trade_id && <small className="sub-cell">FT #{order.freqtrade_trade_id}</small>}</td>
-              <td><div className="market-cell"><Coin symbol={order.symbol} small /><strong>{order.symbol}</strong></div></td><td><ActionBadge action={order.side} /></td><td><OrderBadge status={order.status} /></td>
-              <td className="mono">{compactNumber(order.requested_amount)}</td><td className="mono">{compactNumber(order.filled_amount)}</td><td className="mono">{money(order.avg_price)}</td><td>{dateTime(order.created_at)}</td>
-              <td><button className="row-button" onClick={() => onTrace(order.trace_id)}><ChevronRight size={17} /></button></td>
-            </tr>)}{filtered.length === 0 && <tr><td colSpan={9}><EmptyTable text="No orders match these filters." /></td></tr>}</tbody>
+          <table>
+            <thead>
+              <tr>
+                <th>Market / Side</th>
+                <th>Setup regime</th>
+                <th>Score</th>
+                <th>Entry → Exit</th>
+                <th>P&L</th>
+                <th>R multiple</th>
+                <th>Exit reason</th>
+                <th>Opened</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((trade) => (
+                <TradeRow key={trade.position.id} trade={trade} onOpen={() => setSelectedId(trade.position.id)} />
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={9}><EmptyTable text="No trades match these filters." /></td>
+                </tr>
+              )}
+            </tbody>
           </table>
         </div>
       </Panel>
+
+      {activeTrade && (
+        <TradeDrawer
+          trade={activeTrade}
+          onClose={() => setSelectedId(null)}
+          onTrace={(id) => {
+            setSelectedId(null)
+            onTrace(id)
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function PositionsPage({ positions }: { positions: Position[] }) {
-  const open = positions.filter((position) => position.status === 'OPEN')
-  const closed = positions.filter((position) => position.status === 'CLOSED')
-  const realized = closed.reduce((sum, position) => sum + Number(position.pnl_usdt ?? 0), 0)
-  const winners = closed.filter((position) => Number(position.pnl_usdt ?? 0) > 0).length
+function TradeRow({ trade, onOpen }: { trade: Trade; onOpen: () => void }) {
+  const { position } = trade
+  const isOpen = position.status === 'OPEN'
+  const pnl = isOpen ? position.unrealized_pnl_usdt : position.pnl_usdt
+  const pnlPct = isOpen ? position.unrealized_pnl_pct : position.pnl_pct
+  const pnlTone = pnl == null ? '' : Number(pnl) >= 0 ? 'positive-text' : 'negative-text'
   return (
-    <div className="page-stack">
-      <section className="mini-metrics">
-        <MetricCard label="Open positions" value={String(open.length)} note="Long-only spot positions" icon={<Activity />} />
-        <MetricCard label="Realized P&L" value={money(realized)} note={`${closed.length} closed positions`} icon={<CircleDollarSign />} tone={realized >= 0 ? 'positive' : 'negative'} />
-        <MetricCard label="Win rate" value={closed.length ? percent(winners / closed.length) : '—'} note={`${winners} profitable closes`} icon={<TrendingUp />} />
-      </section>
-      <Panel title="Open positions" subtitle="Current dry-run holdings mirrored from execution webhooks">
-        {open.length ? <div className="position-grid">{open.map((position) => <PositionCard key={position.id} position={position} />)}</div> : <EmptyState icon={<WalletCards />} title="No open positions" text="An approved BUY signal will appear here after its entry order fills." />}
-      </Panel>
-      <Panel title="Position history" subtitle="Closed positions and realized outcomes">
-        <div className="table-scroll"><table><thead><tr><th>Market</th><th>Entry</th><th>Exit</th><th>Amount</th><th>P&L</th><th>Return</th><th>Opened</th><th>Closed</th></tr></thead>
-          <tbody>{closed.map((position) => <tr key={position.id}><td><div className="market-cell"><Coin symbol={position.symbol} small /><strong>{position.symbol}</strong></div></td><td className="mono">{money(position.entry_price)}</td><td className="mono">{money(position.exit_price)}</td><td className="mono">{compactNumber(position.amount)}</td><td className={Number(position.pnl_usdt ?? 0) >= 0 ? 'positive-text' : 'negative-text'}>{money(position.pnl_usdt)}</td><td className={Number(position.pnl_pct ?? 0) >= 0 ? 'positive-text' : 'negative-text'}>{percent(position.pnl_pct)}</td><td>{dateTime(position.opened_at)}</td><td>{dateTime(position.closed_at)}</td></tr>)}{closed.length === 0 && <tr><td colSpan={8}><EmptyTable text="No positions have closed yet." /></td></tr>}</tbody>
-        </table></div>
-      </Panel>
+    <tr className="clickable-row" onClick={onOpen}>
+      <td>
+        <div className="market-cell">
+          <Coin symbol={position.symbol} small />
+          <div>
+            <strong>{position.symbol}</strong>
+            <small className="sub-cell">Long</small>
+          </div>
+        </div>
+      </td>
+      <td>{trade.setupRegime ? readable(trade.setupRegime) : '—'}</td>
+      <td className="mono">{trade.tradeScore ?? '—'}</td>
+      <td className="mono">{money(position.entry_price)} → {isOpen ? '—' : money(position.exit_price)}</td>
+      <td className={pnlTone}>
+        {pnl == null ? '—' : money(pnl)}
+        {pnlPct != null && <small className="sub-cell">{percent(pnlPct)}{isOpen ? ' unreal.' : ''}</small>}
+      </td>
+      <td className={`mono ${perfToneClass(position.r_multiple ?? null)}`}>{rMultiple(position.r_multiple ?? null)}</td>
+      <td>{isOpen ? <span className="badge hold">Open</span> : position.exit_reason ? readable(position.exit_reason) : '—'}</td>
+      <td>{dateTime(position.opened_at)}</td>
+      <td>
+        <button
+          className="row-button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onOpen()
+          }}
+          aria-label="Open trade detail"
+        >
+          <ChevronRight size={17} />
+        </button>
+      </td>
+    </tr>
+  )
+}
+
+function TradeDrawer({ trade, onClose, onTrace }: { trade: Trade; onClose: () => void; onTrace: (id: string) => void }) {
+  const { position, decision, signal, orders } = trade
+  const isOpen = position.status === 'OPEN'
+  const pnl = isOpen ? position.unrealized_pnl_usdt : position.pnl_usdt
+  const pnlPct = isOpen ? position.unrealized_pnl_pct : position.pnl_pct
+  const pnlNum = pnl == null ? null : Number(pnl)
+  const entryValue = Number(position.entry_price) * Number(position.amount)
+  const hasSetup = Boolean(signal) || trade.setupRegime !== null || trade.tradeScore !== null
+
+  return (
+    <div className="drawer-layer">
+      <button className="drawer-scrim" onClick={onClose} aria-label="Close trade detail" />
+      <aside className="drawer">
+        <header>
+          <div>
+            <span className="eyebrow">TRADE DETAIL</span>
+            <h2>{position.symbol} · Long</h2>
+          </div>
+          <button className="icon-button" onClick={onClose}><X size={20} /></button>
+        </header>
+        <div className="drawer-body">
+          <div className="detail-hero">
+            <Coin symbol={position.symbol} />
+            <div>
+              <strong>{position.symbol} · {isOpen ? 'Open position' : 'Closed'}</strong>
+              <span>
+                Opened {dateTime(position.opened_at)}
+                {position.closed_at ? ` · closed ${dateTime(position.closed_at)}` : ''}
+              </span>
+            </div>
+            <span className={`badge ${isOpen ? 'hold' : pnlNum !== null && pnlNum < 0 ? 'rejected' : 'approved'} large`}>
+              {isOpen ? 'Open' : pnlNum === null ? 'Closed' : `${pnlNum >= 0 ? '+' : ''}${money(pnlNum)}`}
+            </span>
+          </div>
+
+          <h3>Setup &amp; score</h3>
+          {hasSetup ? (
+            <>
+              <dl className="detail-list">
+                <div><dt>Setup regime</dt><dd>{trade.setupRegime ? readable(trade.setupRegime) : '—'}</dd></div>
+                <div><dt>Volatility regime</dt><dd>{trade.volatilityRegime ? readable(trade.volatilityRegime) : '—'}</dd></div>
+                <div><dt>Trade score</dt><dd>{trade.tradeScore ?? '—'}{trade.tradeScore != null ? ' / 100' : ''}</dd></div>
+                <div><dt>LLM confidence</dt><dd>{signal ? `${Math.round(Number(signal.confidence) * 100)}%` : '—'}</dd></div>
+                <div><dt>LLM action</dt><dd>{signal ? signal.action : '—'}</dd></div>
+                <div><dt>Model</dt><dd>{signal?.model_name ?? '—'}</dd></div>
+              </dl>
+              {trade.scoreBreakdown && Object.keys(trade.scoreBreakdown).length > 0 && (
+                <dl className="detail-list">
+                  {Object.entries(trade.scoreBreakdown).map(([key, value]) => (
+                    <div key={key}><dt>{readable(key)}</dt><dd>{value}</dd></div>
+                  ))}
+                </dl>
+              )}
+              {signal?.reasoning && <div className="reason-box">{signal.reasoning}</div>}
+            </>
+          ) : (
+            <p className="muted">No setup data for this trade — it opened before setup scoring, or its signal is outside the loaded history.</p>
+          )}
+
+          <h3>Risk</h3>
+          {decision ? (
+            <dl className="detail-list">
+              <div><dt>Position size</dt><dd>{money(decision.position_size_usdt)}</dd></div>
+              <div><dt>Stop loss</dt><dd>{money(decision.stop_loss_price)}</dd></div>
+              <div><dt>Stop distance</dt><dd>{decision.stop_distance_pct == null ? '—' : percent(decision.stop_distance_pct)}</dd></div>
+              <div><dt>Nominal risk budget</dt><dd>{money(decision.nominal_risk_amount_usdt ?? null)}</dd></div>
+              <div><dt>Actual risk (1R)</dt><dd>{money(decision.actual_risk_usdt ?? null)}</dd></div>
+              <div><dt>Risk % applied</dt><dd>{decision.risk_pct_applied == null ? '—' : percent(decision.risk_pct_applied)}</dd></div>
+              <div><dt>Equity snapshot</dt><dd>{money(decision.equity_snapshot_usdt)}</dd></div>
+            </dl>
+          ) : (
+            <p className="muted">The risk decision for this trade is outside the loaded history.</p>
+          )}
+
+          <h3>Execution</h3>
+          <dl className="detail-list">
+            <div><dt>Entry price</dt><dd>{money(position.entry_price)}</dd></div>
+            <div><dt>Exit price</dt><dd>{isOpen ? '—' : money(position.exit_price)}</dd></div>
+            <div><dt>Amount</dt><dd>{compactNumber(position.amount)}</dd></div>
+            <div><dt>Entry value</dt><dd>{money(entryValue)}</dd></div>
+            {isOpen && <div><dt>Current price</dt><dd>{money(position.current_price)}</dd></div>}
+            {isOpen && position.price_updated_at && <div><dt>Market mark</dt><dd>{dateTime(position.price_updated_at)}</dd></div>}
+          </dl>
+
+          <h3>Orders</h3>
+          {orders.length > 0 ? (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>Order</th><th>Side</th><th>Status</th><th>Filled</th><th>Avg price</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                  {orders.map((order) => (
+                    <tr key={order.id}>
+                      <td className="mono">
+                        {shortId(order.id)}
+                        {order.freqtrade_trade_id && <small className="sub-cell">FT #{order.freqtrade_trade_id}</small>}
+                      </td>
+                      <td><ActionBadge action={order.side} /></td>
+                      <td><OrderBadge status={order.status} /></td>
+                      <td className="mono">{compactNumber(order.filled_amount)}</td>
+                      <td className="mono">{money(order.avg_price)}</td>
+                      <td>{dateTime(order.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">The order records for this trade are outside the loaded history.</p>
+          )}
+
+          <h3>Outcome</h3>
+          <dl className="detail-list">
+            <div><dt>Status</dt><dd>{readable(position.status)}</dd></div>
+            <div><dt>{isOpen ? 'Unrealized P&L' : 'Realized P&L'}</dt><dd>{pnl == null ? '—' : money(pnl)}</dd></div>
+            <div><dt>Return</dt><dd>{pnlPct == null ? '—' : percent(pnlPct)}</dd></div>
+            <div><dt>R multiple</dt><dd>{rMultiple(position.r_multiple ?? null)}</dd></div>
+            <div><dt>Exit reason</dt><dd>{isOpen ? 'Position open' : position.exit_reason ? readable(position.exit_reason) : '—'}</dd></div>
+            <div><dt>Fees{position.fees_estimated ? ' (est.)' : ''}</dt><dd>{money(position.fees_usdt ?? null)}</dd></div>
+            <div><dt>Opened</dt><dd>{dateTime(position.opened_at)}</dd></div>
+            <div><dt>Closed</dt><dd>{position.closed_at ? dateTime(position.closed_at) : '—'}</dd></div>
+            <div><dt>Duration</dt><dd>{position.closed_at ? duration(new Date(position.closed_at).getTime() - new Date(position.opened_at).getTime()) : 'Still open'}</dd></div>
+          </dl>
+
+          {trade.traceId && (
+            <button className="text-button" onClick={() => onTrace(trade.traceId!)}>
+              Full audit trail <ChevronRight size={15} />
+            </button>
+          )}
+        </div>
+      </aside>
     </div>
   )
 }
@@ -879,43 +1147,6 @@ function LLMConfigPage({ apiKey, data, onUpdated }: { apiKey: string; data: Dash
         <div className="warning-card"><AlertTriangle size={20} /><div><strong>The LLM never sees account data</strong><p>Balance, API keys, and position size are excluded from every request by design — switching provider or model here cannot grant execution access.</p></div></div>
       </aside>
     </div>
-  )
-}
-
-function PositionCard({ position }: { position: Position }) {
-  const entryValue = Number(position.entry_price) * Number(position.amount)
-  const currentValue = position.current_value_usdt === null
-    ? entryValue
-    : Number(position.current_value_usdt)
-  const pnl = position.unrealized_pnl_usdt === null
-    ? null
-    : Number(position.unrealized_pnl_usdt)
-  const pnlTone = pnl !== null && pnl < 0 ? 'negative-text' : 'positive-text'
-  return (
-    <article className="position-card">
-      <header>
-        <Coin symbol={position.symbol} />
-        <div><strong>{position.symbol}</strong><span>Opened {timeAgo(position.opened_at)}</span></div>
-        <span className="open-badge">OPEN</span>
-      </header>
-      <div className="position-value">
-        <span>Current value</span>
-        <strong>{money(currentValue)}</strong>
-      </div>
-      <div className="position-pnl">
-        <span>Unrealized P&amp;L <small>before exit fees</small></span>
-        <strong className={pnl === null ? undefined : pnlTone}>
-          {pnl === null ? 'Awaiting market mark' : `${pnl >= 0 ? '+' : ''}${money(pnl)} (${percent(position.unrealized_pnl_pct)})`}
-        </strong>
-      </div>
-      <div className="position-facts">
-        <span>Entry price<strong>{money(position.entry_price)}</strong></span>
-        <span>Current price<strong>{money(position.current_price)}</strong></span>
-        <span>Amount<strong>{compactNumber(position.amount)}</strong></span>
-        <span>Entry order<strong className="mono">{shortId(position.entry_order_id)}</strong></span>
-      </div>
-      {position.price_updated_at && <p className="position-updated">Market mark: {dateTime(position.price_updated_at)}</p>}
-    </article>
   )
 }
 
