@@ -139,7 +139,7 @@ graph TB
 | **PostgreSQL** | Durable, queryable audit history: every signal, decision, order, position, and system-state change | `signals`, `risk_decisions`, `orders`, `positions`, `audit_events`, `system_state` | Be bypassed — no component may take an action that changes trading state without a corresponding row written here |
 | **Redis** | Low-latency coordination: pending-signal queue, per-cycle locks, idempotency keys, cached latest state, kill-switch flag cache | Ephemeral/coordination state only (Section 10.2) | Be the system of record — anything in Redis that matters for audit must also land in PostgreSQL |
 | **FastAPI Admin API** | Human-facing read/observe/control surface | HTTP interface, auth, kill-switch endpoint, config read/patch, Freqtrade webhook ingestion | Place trades directly; expose exchange credentials |
-| **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
+| **React Operator Console** | Browser-based single-operator view over the Admin API | Present signals, decisions, orders, positions, P&L, R-normalized performance/expectancy metrics, audit timelines, and existing administrative controls | Connect directly to Postgres, Redis, Binance, or Freqtrade; place or approve orders; embed the Admin API key in its image |
 | **Telegram Notifier** | Push real-time notifications for signals, decisions, orders, and kill-switch events; also emails a weekly business-performance summary | Outbound Telegram messages, plus the weekly summary email | Be a control channel for anything beyond a documented kill-switch command (Section 11) |
 
 ---
@@ -263,7 +263,8 @@ trademind/
 │   │   │   ├── main.py            # FastAPI app: POST /analyze — composition root only
 │   │   │   ├── models/            # wire.py (Section 8 contract), market.py, strategy.py, llm.py
 │   │   │   ├── context/           # ContextBuilder: AnalyzeRequest -> MarketContext
-│   │   │   ├── strategies/        # StrategySelector: deterministic regime classification
+│   │   │   ├── strategies/        # StrategySelector (regime) + VolatilityClassifier (ATR bucket)
+│   │   │   ├── scoring/           # TradeScorer: deterministic 0-100 setup-quality rubric
 │   │   │   ├── prompts/           # versioned prompt templates + PromptBuilder
 │   │   │   ├── llm/               # LLMClient (retry/timeout) + providers/ (anthropic, ollama)
 │   │   │   ├── validators/        # structural + semantic validation, ResponseValidator
@@ -273,8 +274,8 @@ trademind/
 │   │   └── tests/
 │   ├── scheduler/
 │   │   ├── app/
-│   │   │   ├── main.py            # APScheduler bootstrap
-│   │   │   ├── jobs.py            # per-symbol cycle job
+│   │   │   ├── main.py            # APScheduler bootstrap (per-symbol cycles + daily performance-snapshot job)
+│   │   │   ├── jobs.py            # per-symbol cycle job + Performance Engine snapshot writer (M3)
 │   │   │   ├── market_data.py     # Binance public REST client (ccxt)
 │   │   │   ├── indicators.py      # RSI/EMA/MACD/ATR computation
 │   │   │   └── sentiment/          # advisory weighted sentiment providers + service
@@ -292,7 +293,7 @@ trademind/
 │   ├── admin_api/
 │   │   ├── app/
 │   │   │   ├── main.py
-│   │   │   ├── routers/           # signals.py, decisions.py, positions.py,
+│   │   │   ├── routers/           # signals.py, decisions.py, positions.py, performance.py,
 │   │   │   │                      # killswitch.py, config.py, webhooks.py
 │   │   │   ├── auth.py            # API key dependency
 │   │   │   └── schemas.py
@@ -308,6 +309,9 @@ trademind/
 │       ├── db/                    # SQLAlchemy 2 models + session factory
 │       ├── redis_keys.py          # single source of truth for key naming (Section 10.2)
 │       ├── enums.py               # Action, RejectionReason, OrderStatus, ...
+│       ├── performance.py         # Performance Engine math — pure, ORM-free, shared by the
+│       │                          # endpoint, the snapshot job and scripts/backtest (M3)
+│       ├── performance_query.py   # positions -> ClosedTradeMetrics loader for the above (M3)
 │       └── config.py              # typed settings loader (pydantic-settings)
 ├── freqtrade/
 │   ├── user_data/
@@ -375,6 +379,10 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `price` | numeric | Close price of `candle_ts`. Added in Phase 2: the Section 9.2 sizing formula needs the entry price that produced this signal, and this is the only place it survives past the LLM call |
 | `atr_14` | numeric | ATR(14) at `candle_ts`, same rationale as `price` — Section 9.2's stop-distance calculation is not derivable without it |
 | `status` | enum | `PENDING` \| `CONSUMED` \| `EXPIRED` |
+| `trade_score` | integer, nullable, indexed | 0-100, from `llm_service`'s `TradeScorer` (Section 8, positive-expectancy plan D3/M2). Set on every signal, computed before the LLM call |
+| `score_breakdown` | jsonb, nullable | Per-component sub-scores (Trend/Momentum/Volume/Regime/Risk:Reward/Volatility) plus the assumed-reward figures that produced them — audit/debugging detail behind the single `trade_score` total |
+| `setup_regime` | text, nullable, indexed | `StrategySelector`'s existing label (`trend_following` \| `trend_pullback` \| `momentum_continuation` \| `mean_reversion`), promoted from `raw_response` to a first-class column |
+| `volatility_regime` | text, nullable, indexed | `HIGH_VOLATILITY` \| `NORMAL` \| `LOW_VOLATILITY`, from `VolatilityClassifier` — the one genuinely new regime dimension (plan D2), orthogonal to `setup_regime` |
 | `created_at` | timestamptz | |
 
 ### 7.2 RiskDecision
@@ -391,6 +399,9 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `stop_loss_price` | numeric, nullable | |
 | `equity_snapshot_usdt` | numeric, nullable | Authenticated Freqtrade account equity at decision time; `null` only when the decision was rejected because no valid balance could be obtained |
 | `risk_pct_applied` | numeric, nullable | |
+| `nominal_risk_amount_usdt` | numeric, nullable | `equity_usdt * risk_per_trade_pct` at decision time — the pre-clamp risk budget. Set only if approved (Positive-Expectancy plan D1) |
+| `actual_risk_usdt` | numeric, nullable | `position_size_usdt * stop_distance_pct` — what was truly at stake on this specific trade once `max_position_pct`/free-balance/confidence clamps are applied. This, not the nominal figure, is the R-multiple denominator used everywhere expectancy math happens (`positions.r_multiple`). Set only if approved |
+| `stop_distance_pct` | numeric, nullable | Already computed by `sizing.compute_sizing`; persisted here rather than only used transiently. Set only if approved |
 | `created_at` | timestamptz | |
 
 ### 7.3 Order
@@ -423,6 +434,12 @@ Every row created during a single trading-cycle run shares a `trace_id` (UUID, m
 | `amount` | numeric | |
 | `pnl_usdt` / `pnl_pct` | numeric, nullable | Set on close |
 | `opened_at` / `closed_at` | timestamptz | |
+| `exit_reason` | text, nullable, indexed | `atr_stoploss` \| `trailing_stop` \| `minimal_roi` \| `llm_sell_signal` \| `roi` \| `manual` — copied verbatim from the Freqtrade webhook's `exit_reason` on close (Positive-Expectancy plan M1). `null` for positions closed before this field existed (no retroactive backfill, plan D5) |
+| `fees_usdt` | numeric, nullable | Set on close. Always config-estimated today (`RiskConfig.estimated_fee_pct`, round-trip on entry+exit notional) — the Freqtrade webhook payload carries no real per-trade fee figure yet |
+| `fees_estimated` | boolean | Default `false`; `true` whenever `fees_usdt` came from `estimated_fee_pct` rather than a genuine Freqtrade-reported fee (currently always `true` when `fees_usdt` is set, since no real source exists yet) |
+| `r_multiple` | numeric, nullable | `pnl_usdt / risk_decisions.actual_risk_usdt`, resolved via `entry_order_id → Order.risk_decision_id → RiskDecision`. `null` for legacy positions and whenever the linked decision has no `actual_risk_usdt` (plan D5) |
+| `market_regime` | text, nullable, indexed | Copy of the entry `Signal.setup_regime` (positive-expectancy plan M2), denormalized at open the same way `entry_price`/`amount` already are. `null` for positions opened before this field existed |
+| `trade_score` | integer, nullable, indexed | Copy of the entry `Signal.trade_score`, same denormalization rationale |
 
 `GET /positions` enriches open-position responses with non-persisted
 `current_price`, `current_value_usdt`, `unrealized_pnl_usdt`,
@@ -453,7 +470,32 @@ Singleton table (single row, `id = 1`), Postgres as durable source of truth; Red
 | `consecutive_loss_reset_at` | timestamptz, nullable | Set when an operator explicitly disables the kill switch; closed positions at or before this boundary remain in the audit history but do not count toward a new consecutive-loss streak |
 | `updated_at` | timestamptz | |
 
-### 7.7 Example: a fully approved cycle, in JSON
+### 7.7 PerformanceSnapshot
+
+Positive-expectancy plan M3. One row per scheduled Performance Engine recompute (the
+Scheduler's daily `performance-snapshot` job, `scheduler/app/jobs.py`), so expectancy
+degradation is visible as a time series rather than only a single live number. This is the
+**unfiltered whole-account cohort**; the live `GET /performance` endpoint (Section 11)
+recomputes on demand with symbol/regime/score filters and does **not** write here. Every metric
+column mirrors `common.performance.PerformanceReport` field-for-field.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID, PK | |
+| `computed_at` | timestamptz, indexed | Server default `now()` |
+| `trades` / `wins` / `losses` / `breakeven` | integer | Closed-trade counts (`pnl_usdt` `>0` / `<0` / `==0`) |
+| `trades_with_r` | integer | Trades carrying an `r_multiple` — the denominator for every R metric below |
+| `win_rate` | numeric, nullable | Fraction `0.0`–`1.0`; `null` when there are no closed trades |
+| `avg_win_r` / `avg_loss_r` | numeric, nullable | Mean R of winning / losing trades (`avg_loss_r` negative by convention); `null` when that side has no R-tracked trade |
+| `expectancy_r` / `total_r` | numeric, nullable | Over R-tracked trades only; `null` when none exist |
+| `total_pnl_usdt` | numeric | Realized P&L in USDT over the cohort |
+| `profit_factor` | numeric, nullable | Gross profit ÷ gross loss; `null` when there is no losing trade |
+| `max_drawdown_pct` / `avg_drawdown_pct` | numeric, nullable | Peak-to-trough / mean-underwater fraction of the running equity curve; `null` when no account-equity anchor was available |
+| `total_fees_usdt` | numeric | Sum of per-trade `fees_usdt` (currently always `estimated_fee_pct`-derived) |
+| `total_slippage_usdt` | numeric, nullable | Always `null` today — production has no per-trade slippage source (D5 / implementation plan §1). Kept so a snapshot mirrors the endpoint response field-for-field |
+| `starting_equity_usdt` | numeric, nullable | The equity anchor used for the drawdown curve; `null` when unavailable |
+
+### 7.8 Example: a fully approved cycle, in JSON
 
 ```json
 {
@@ -502,7 +544,7 @@ Singleton table (single row, `id = 1`), Postgres as durable source of truth; Red
 
 The LLM Analysis Service exposes exactly one endpoint internally: `POST /analyze`. It is a pure function from market context to opinion — no memory of prior calls beyond what is explicitly passed in `position_context`, no side effects.
 
-Internally, `POST /analyze` runs a fixed in-process pipeline (`services/pipeline.py`'s `AnalysisPipeline`, composed in `main.py`): **Context Builder** (`context/builder.py`) normalizes the request into a typed `MarketContext` → **Strategy Selector** (`strategies/selector.py`) deterministically labels the market regime (trend-following / trend-pullback / momentum-continuation / mean-reversion) from that context, with no LLM call and no BUY/SELL/HOLD output → **Prompt Builder** (`prompts/builder.py`) assembles the system + user prompt → **LLM Client** (`llm/client.py`) invokes the configured `Provider` with retry/timeout → **Response Validator** (`validators/`) runs the structural + semantic checks below → **Signal Generator** (`signals/generator.py`) produces the final `TradingSignal`. This is an internal decomposition of one service, not a new trust boundary or a second LLM call — the sections below still define the one and only model-facing contract.
+Internally, `POST /analyze` runs a fixed in-process pipeline (`services/pipeline.py`'s `AnalysisPipeline`, composed in `main.py`): **Context Builder** (`context/builder.py`) normalizes the request into a typed `MarketContext` → **Strategy Selector** (`strategies/selector.py`) deterministically labels the market regime (trend-following / trend-pullback / momentum-continuation / mean-reversion) from that context, with no LLM call and no BUY/SELL/HOLD output → **Volatility Classifier** (`strategies/volatility_classifier.py`) buckets ATR-relative-to-price into `HIGH_VOLATILITY`/`NORMAL`/`LOW_VOLATILITY` → **Trade Scorer** (`scoring/trade_score.py`) computes a deterministic 0-100 setup-quality score from the same context (positive-expectancy plan D3; Trend/Momentum/Volume/Regime/Risk:Reward/Volatility sub-scores) → **Prompt Builder** (`prompts/builder.py`) assembles the system + user prompt → **LLM Client** (`llm/client.py`) invokes the configured `Provider` with retry/timeout → **Response Validator** (`validators/`) runs the structural + semantic checks below → **Signal Generator** (`signals/generator.py`) produces the final `TradingSignal`. This is an internal decomposition of one service, not a new trust boundary or a second LLM call — the sections below still define the one and only model-facing contract. Strategy/volatility/score are computed once per cycle, before the LLM call, from `context` alone — every `TradingSignal` this pipeline returns carries them (`trade_score`, `score_breakdown`, `setup_regime`, `volatility_regime`, Section 7.1), including HOLD/failure early-return paths, as first-class fields rather than folded into `raw_response`.
 
 ### 8.1 Input — what the LLM receives
 
@@ -748,7 +790,15 @@ position_size_usdt = min(
 )
 
 stop_loss_price = entry_price * (1 - stop_distance_pct)   # long-only, MVP
+
+# Positive-Expectancy plan D1 — persisted on RiskDecision (Section 7.2),
+# both computed by sizing.compute_sizing but distinct in meaning:
+nominal_risk_amount_usdt = risk_amount_usdt          # the pre-clamp budget
+actual_risk_usdt         = position_size_usdt * stop_distance_pct  # what's
+                                                       # truly at stake here
 ```
+
+`nominal_risk_amount_usdt` is the account-level budget targeted *before* `max_position_pct`, free-balance, and confidence-based clamps run; `actual_risk_usdt` is what genuinely remains at risk-if-stopped for *this* trade once those clamps have bound (always `<= nominal_risk_amount_usdt`, equal only when nothing clamped). Per the vision doc's own definition of 1R ("the maximum amount of money intentionally risked on one trade"), `actual_risk_usdt` — never the nominal figure — is the denominator for every R-multiple and expectancy calculation (`Position.r_multiple = pnl_usdt / actual_risk_usdt`).
 
 All monetary and sizing arithmetic uses fixed-point/`Decimal` types — never floating point — to avoid rounding drift in audit figures and order amounts.
 
@@ -834,6 +884,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `GET` | `/orders?symbol=&status=&limit=` | **All order logs** — submitted, filled, failed, cancelled, across all pairs | API key |
 | `GET` | `/orders/{id}` | Single order detail | API key |
 | `GET` | `/audit?trace_id=` | Full timeline for one trading cycle | API key |
+| `GET` | `/performance?symbol=&regime=&score_min=&score_max=&since=&until=` | R-normalized trading performance (win rate, expectancy R, total R, profit factor, drawdown, fees) over the closed-position journal, computed on read for the filtered cohort (Section 7.7 / positive-expectancy plan M3). Read-only — writes no `AuditEvent` | API key |
 | `POST` | `/killswitch/enable` | `{ "reason": string }` — halt all new entries immediately | API key |
 | `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation and acknowledge the prior consecutive-loss streak | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
@@ -871,6 +922,23 @@ The React Operator Console is served on host loopback port `3000` by default and
 // Response 200
 { "killswitch_enabled": true, "updated_by": "api:admin", "updated_at": "2026-07-15T13:05:00Z" }
 ```
+
+**Example — `GET /performance`:**
+
+```json
+{
+  "trades": 40, "wins": 23, "losses": 16, "breakeven": 1, "trades_with_r": 31,
+  "win_rate": 0.575, "avg_win_r": 1.42, "avg_loss_r": -0.88,
+  "expectancy_r": 0.34, "total_r": 10.5, "total_pnl_usdt": 18.75,
+  "profit_factor": 3.8, "max_drawdown_pct": 0.0016, "avg_drawdown_pct": 0.0004,
+  "total_fees_usdt": 1.20, "total_slippage_usdt": null, "starting_equity_usdt": 624.00,
+  "filters": { "symbol": null, "regime": null, "score_min": null, "score_max": null, "since": null, "until": null }
+}
+```
+
+R-based figures (`*_r`) count only trades with an `r_multiple` (`trades_with_r`); trades opened
+before M1 have none and are excluded rather than treated as zero. Both drawdown figures are
+`null` when no live account-equity anchor was available at compute time.
 
 The Telegram bot supports the same two kill-switch actions as slash commands (`/killswitch_on`, `/killswitch_off`) which call this API internally with `updated_by="telegram:<chat_id>"` — Telegram is a client of the API, not a parallel control path.
 

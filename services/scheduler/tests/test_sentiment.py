@@ -11,6 +11,7 @@ from common.sentiment import (
     sentiment_state_for_score,
 )
 from pydantic import ValidationError
+
 from scheduler.app.sentiment import MarketSentimentService, default_sentiment_providers
 from scheduler.app.sentiment.providers import (
     EMATrendProvider,

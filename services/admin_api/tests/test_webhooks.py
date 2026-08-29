@@ -8,14 +8,15 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from admin_api.app.deps import get_db_session
-from admin_api.app.main import app
-from admin_api.app.routers.webhooks import get_webhook_settings
-from common.config import DatabaseSettings, WebhookSettings
-from common.db.models import Order, Position, RiskDecision, Signal
+from common.config import DatabaseSettings, RiskConfig, WebhookSettings
+from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from admin_api.app.deps import get_db_session
+from admin_api.app.main import app
+from admin_api.app.routers.webhooks import get_webhook_settings
 
 WEBHOOK_SECRET = "test-shared-secret"
 
@@ -79,6 +80,9 @@ async def _seed_submitted_entry_order(
                 price=Decimal("60000"),
                 atr_14=Decimal("500"),
                 status=SignalStatus.CONSUMED.value,
+                trade_score=72,
+                setup_regime="trend_pullback",
+                volatility_regime="NORMAL",
             )
         )
         await session.flush()
@@ -91,6 +95,9 @@ async def _seed_submitted_entry_order(
             stop_loss_price=Decimal("59000"),
             equity_snapshot_usdt=Decimal("10000"),
             risk_pct_applied=Decimal("0.01"),
+            nominal_risk_amount_usdt=Decimal("100"),
+            actual_risk_usdt=Decimal("10"),
+            stop_distance_pct=Decimal("0.016667"),
         )
         session.add(decision)
         await session.flush()
@@ -146,6 +153,9 @@ async def test_entry_fill_marks_order_filled_and_opens_position(db_session_facto
         ).scalar_one()
         assert position.status == PositionStatus.OPEN.value
         assert position.entry_price == Decimal("60050.5")
+        # Positive-expectancy plan M2: denormalized from the entry Signal.
+        assert position.market_regime == "trend_pullback"
+        assert position.trade_score == 72
 
 
 async def test_entry_fill_backfills_missing_trade_id(db_session_factory):
@@ -259,6 +269,7 @@ async def test_exit_fill_closes_position(db_session_factory):
                 "profit_amount": "8.3",
                 "profit_ratio": "0.0166",
                 "close_date": "2026-07-15T15:00:00+00:00",
+                "exit_reason": "atr_stoploss",
             },
         )
     assert response.status_code == 204
@@ -270,6 +281,30 @@ async def test_exit_fill_closes_position(db_session_factory):
         assert position.status == PositionStatus.CLOSED.value
         assert position.pnl_usdt == Decimal("8.3")
         assert position.exit_price == Decimal("61000")
+        # Positive-expectancy plan M1.
+        assert position.exit_reason == "atr_stoploss"
+        assert position.r_multiple == Decimal("8.3") / Decimal("10")  # pnl / actual_risk_usdt
+        entry_notional = Decimal("60000") * Decimal("0.0083")
+        exit_notional = Decimal("61000") * Decimal("0.0083")
+        expected_fees = RiskConfig().estimated_fee_pct * (entry_notional + exit_notional)
+        assert position.fees_usdt == expected_fees
+        assert position.fees_estimated is True
+
+        closed_event = (
+            await session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.trace_id == exit_order.trace_id,
+                    AuditEvent.event_type == "POSITION_CLOSED",
+                )
+            )
+        ).scalars().first()
+        # Decimal-value comparison, not string equality: Postgres's
+        # Numeric(10,4)/Numeric(20,8) columns round-trip with trailing-zero
+        # padding (e.g. "0.8300" vs the payload's "0.83") that differs in
+        # representation but not in value.
+        assert Decimal(closed_event.payload["r_multiple"]) == position.r_multiple
+        assert Decimal(closed_event.payload["fees_usdt"]) == position.fees_usdt
+        assert closed_event.payload["fees_estimated"] is True
 
 
 async def test_autonomous_roi_exit_creates_order_and_closes_position(db_session_factory):
@@ -318,6 +353,11 @@ async def test_autonomous_roi_exit_creates_order_and_closes_position(db_session_
         assert exit_order.side == "SELL"
         assert exit_order.status == OrderStatus.FILLED.value
         assert exit_order.freqtrade_trade_id == 42
+        # Positive-expectancy plan M1: the synthetic exit-order path (no
+        # prior TradeMind SELL order) still resolves actual_risk_usdt via
+        # the entry order's RiskDecision and persists exit_reason/r_multiple.
+        assert position.exit_reason == "roi"
+        assert position.r_multiple == Decimal("7.3") / Decimal("10")
 
 
 async def test_unknown_trade_id_is_a_noop(db_session_factory):

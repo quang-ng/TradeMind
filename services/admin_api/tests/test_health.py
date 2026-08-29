@@ -1,5 +1,6 @@
-from admin_api.app.main import app
 from fastapi.testclient import TestClient
+
+from admin_api.app.main import app
 
 
 def test_health_returns_200_ok():

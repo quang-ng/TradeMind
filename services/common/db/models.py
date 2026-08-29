@@ -48,6 +48,15 @@ class Signal(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     atr_14: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     status: Mapped[SignalStatus] = mapped_column(String, default=SignalStatus.PENDING)
+    # Positive-expectancy plan M2 (D3): promoted to first-class, queryable
+    # columns rather than left inside `raw_response` — computed once per
+    # cycle by `AnalysisPipeline` before the LLM call, so every signal has
+    # them regardless of eventual action (D2/Section 1's gap with the older
+    # `strategy_selected` raw_response field is exactly what this avoids).
+    trade_score: Mapped[int | None] = mapped_column(index=True, nullable=True)
+    score_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    setup_regime: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    volatility_regime: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -68,6 +77,14 @@ class RiskDecision(Base):
         Numeric(20, 8), nullable=True
     )
     risk_pct_applied: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    # Positive-expectancy plan M1 (D1): `nominal_risk_amount_usdt` is the
+    # pre-clamp equity*risk_pct budget; `actual_risk_usdt` is what was truly
+    # at stake for this specific trade after sizing clamps
+    # (`position_size_usdt * stop_distance_pct`) — the R-multiple
+    # denominator. Both null when rejected (no sizing candidate reached).
+    nominal_risk_amount_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    actual_risk_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    stop_distance_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -110,6 +127,24 @@ class Position(Base):
     pnl_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Positive-expectancy plan M1 — all nullable/set on close only, so
+    # already-open positions from before this migration are unaffected
+    # (D5: no retroactive backfill).
+    exit_reason: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    fees_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    fees_estimated: Mapped[bool] = mapped_column(default=False)
+    # `pnl_usdt / risk_decisions.actual_risk_usdt` via
+    # `entry_order_id -> Order.risk_decision_id`; null for legacy rows
+    # (predate this column) and for the rare case where the linked
+    # RiskDecision has no `actual_risk_usdt` (e.g. pre-M1 decision).
+    r_multiple: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    # Positive-expectancy plan M2 — denormalized from the entry `Signal` at
+    # open (`admin_api/routers/webhooks.py::_handle_entry_fill`), same
+    # precedent as `entry_price`/`amount` already being copied rather than
+    # only living upstream (Section 3, M2). Null for positions opened
+    # before this migration (D5: no retroactive backfill).
+    market_regime: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
+    trade_score: Mapped[int | None] = mapped_column(index=True, nullable=True)
 
 
 class AuditEvent(Base):
@@ -122,6 +157,49 @@ class AuditEvent(Base):
     event_type: Mapped[AuditEventType] = mapped_column(String, index=True)
     payload: Mapped[dict] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PerformanceSnapshot(Base):
+    """Positive-expectancy plan M3 — one row per scheduled Performance
+    Engine recompute (`scheduler/app/jobs.py`), so expectancy degradation is
+    visible as a time series rather than only a single live number (feeds
+    M6 / vision-doc Phase 11's continuous-feedback loop).
+
+    This is the *unfiltered* whole-account cohort; the live
+    `GET /performance` endpoint recomputes on demand with symbol/regime/
+    score filters and does not write here. Every metric column mirrors
+    `common.performance.PerformanceReport`; the R/drawdown columns are
+    nullable for the same reasons that dataclass's fields are Optional
+    (legacy rows without `r_multiple`, no equity anchor for drawdown).
+    """
+
+    __tablename__ = "performance_snapshots"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    trades: Mapped[int] = mapped_column()
+    wins: Mapped[int] = mapped_column()
+    losses: Mapped[int] = mapped_column()
+    breakeven: Mapped[int] = mapped_column()
+    trades_with_r: Mapped[int] = mapped_column()
+    win_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    avg_win_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    avg_loss_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    expectancy_r: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    total_r: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    total_pnl_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    profit_factor: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    max_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    avg_drawdown_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    total_fees_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    # Always NULL for now — production has no per-trade slippage source
+    # (implementation plan Section 1). Kept on the row so the column is
+    # ready the day one exists, and so a snapshot mirrors the endpoint
+    # response field-for-field.
+    total_slippage_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    starting_equity_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
 
 class SystemState(Base):

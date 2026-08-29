@@ -18,7 +18,10 @@ class RiskDecisionResult:
     position_size_usdt: Decimal | None = None
     position_size_base: Decimal | None = None
     stop_loss_price: Decimal | None = None
+    stop_distance_pct: Decimal | None = None
     risk_pct_applied: Decimal | None = None
+    nominal_risk_amount_usdt: Decimal | None = None
+    actual_risk_usdt: Decimal | None = None
     auto_trip_killswitch: bool = False
 
 
@@ -70,5 +73,8 @@ def evaluate(
         position_size_usdt=candidate.position_size_usdt,
         position_size_base=candidate.position_size_base,
         stop_loss_price=candidate.stop_loss_price,
+        stop_distance_pct=candidate.stop_distance_pct,
         risk_pct_applied=candidate.risk_pct_applied,
+        nominal_risk_amount_usdt=candidate.nominal_risk_amount_usdt,
+        actual_risk_usdt=candidate.actual_risk_usdt,
     )

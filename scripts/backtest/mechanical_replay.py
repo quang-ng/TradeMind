@@ -61,7 +61,9 @@ from scheduler.app.indicators import compute_indicators  # noqa: E402
 logger = logging.getLogger("backtest.mechanical_replay")
 
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parent / ".data"
-_STUB_REASONING = "mechanical-replay stub: always proposes the natural action for the rubric to gate"
+_STUB_REASONING = (
+    "mechanical-replay stub: always proposes the natural action for the rubric to gate"
+)
 
 
 def build_context(
@@ -318,14 +320,20 @@ async def run(args: argparse.Namespace) -> None:
     print_summary(ledger, candles_by_symbol, trade_regimes)
 
 
-def print_summary(ledger: Ledger, candles_by_symbol: dict[str, list[dict]], trade_regimes: dict) -> None:
+def print_summary(
+    ledger: Ledger, candles_by_symbol: dict[str, list[dict]], trade_regimes: dict
+) -> None:
     trades = ledger.closed_trades
     wins = [t for t in trades if t.pnl_usdt > 0]
     losses = [t for t in trades if t.pnl_usdt <= 0]
     win_rate = (len(wins) / len(trades) * 100) if trades else 0.0
     drawdown = max_drawdown_pct(ledger.starting_equity_usdt, trades)
 
-    pnl_of_equity = ledger.realized_pnl_usdt / ledger.starting_equity_usdt if ledger.starting_equity_usdt else Decimal("0")
+    pnl_of_equity = (
+        ledger.realized_pnl_usdt / ledger.starting_equity_usdt
+        if ledger.starting_equity_usdt
+        else Decimal("0")
+    )
     print("\n=== Mechanical backtest summary ===")
     print(f"Starting equity: {ledger.starting_equity_usdt} USDT")
     print(
@@ -365,7 +373,9 @@ def print_summary(ledger: Ledger, candles_by_symbol: dict[str, list[dict]], trad
             r_wins = [t for t in regime_trades if t.pnl_usdt > 0]
             r_win_rate = len(r_wins) / len(regime_trades) * 100
             r_pnl = sum((t.pnl_usdt for t in regime_trades), start=Decimal("0"))
-            avg_pct = sum((t.pnl_pct for t in regime_trades), start=Decimal("0")) / len(regime_trades)
+            avg_pct = sum(
+                (t.pnl_pct for t in regime_trades), start=Decimal("0")
+            ) / len(regime_trades)
             print(
                 f"  {regime:<22} n={len(regime_trades):<4} win_rate={r_win_rate:5.1f}%  "
                 f"pnl={r_pnl:>8.2f} USDT  avg_pnl_pct={avg_pct:.2%}"
@@ -381,7 +391,9 @@ def main() -> None:
     parser.add_argument("--start", required=True, help="UTC date/time, e.g. 2026-02-01")
     parser.add_argument("--end", required=True, help="UTC date/time, e.g. 2026-08-04")
     parser.add_argument("--starting-equity", default="10000")
-    parser.add_argument("--fee-pct", default="0.00075", help="Per-leg taker fee (BNB-burn discounted)")
+    parser.add_argument(
+        "--fee-pct", default="0.00075", help="Per-leg taker fee (BNB-burn discounted)"
+    )
     parser.add_argument("--slippage-pct", default="0.0")
     parser.add_argument(
         "--compounding",

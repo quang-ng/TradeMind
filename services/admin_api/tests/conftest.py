@@ -4,12 +4,13 @@ for the same rationale). Skips gracefully if no Postgres is reachable."""
 
 import httpx
 import pytest
-from admin_api.app.auth import get_admin_api_settings
-from admin_api.app.deps import get_db_session
-from admin_api.app.main import app
 from common.config import AdminApiSettings, DatabaseSettings
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from admin_api.app.auth import get_admin_api_settings
+from admin_api.app.deps import get_db_session
+from admin_api.app.main import app
 
 TEST_API_KEY = "test-admin-api-key"
 AUTH_HEADERS = {"Authorization": f"Bearer {TEST_API_KEY}"}

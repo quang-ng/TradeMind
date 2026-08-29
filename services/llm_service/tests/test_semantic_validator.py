@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from common.enums import Action
+
 from llm_service.app.context.builder import ContextBuilder
 from llm_service.app.models.llm import LLMOutput
 from llm_service.app.models.market import MarketContext

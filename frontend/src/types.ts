@@ -31,6 +31,12 @@ export interface Signal {
   created_at: string
   raw_response?: Record<string, unknown> | null
   model_input?: Record<string, unknown> | null
+  // Positive-expectancy plan D3/M2 — computed once per cycle, before the
+  // LLM call, so present regardless of the eventual action.
+  trade_score?: number | null
+  score_breakdown?: Record<string, number> | null
+  setup_regime?: string | null
+  volatility_regime?: 'HIGH_VOLATILITY' | 'NORMAL' | 'LOW_VOLATILITY' | null
 }
 
 export interface Decision {
@@ -45,6 +51,10 @@ export interface Decision {
   equity_snapshot_usdt: string
   risk_pct_applied: string | null
   created_at: string
+  // Positive-expectancy plan M1 (D1) — set only when approved.
+  nominal_risk_amount_usdt?: string | null
+  actual_risk_usdt?: string | null
+  stop_distance_pct?: string | null
 }
 
 export interface Order {
@@ -81,6 +91,14 @@ export interface Position {
   unrealized_pnl_usdt: string | null
   unrealized_pnl_pct: string | null
   price_updated_at: string | null
+  // Positive-expectancy plan M1 — set on close.
+  exit_reason?: string | null
+  fees_usdt?: string | null
+  fees_estimated?: boolean
+  r_multiple?: string | null
+  // Positive-expectancy plan M2 — denormalized from the entry Signal at open.
+  market_regime?: string | null
+  trade_score?: number | null
 }
 
 export interface AuditEvent {
@@ -97,6 +115,42 @@ export interface AuditTimeline {
   risk_decisions: Decision[]
   orders: Order[]
   audit_events: AuditEvent[]
+}
+
+export interface PerformanceFilters {
+  symbol: string | null
+  regime: string | null
+  score_min: number | null
+  score_max: number | null
+  since: string | null
+  until: string | null
+}
+
+// Positive-expectancy plan M3 — mirrors admin_api PerformanceSummary. Every
+// R-based figure and both drawdown figures are nullable: a closed trade
+// opened before M1 has no r_multiple and is excluded from the R metrics
+// (D5), and the drawdown pair needs a live equity anchor that may be
+// missing. total_slippage_usdt is null (not 0) — production has no
+// per-trade slippage source yet.
+export interface PerformanceSummary {
+  trades: number
+  wins: number
+  losses: number
+  breakeven: number
+  trades_with_r: number
+  win_rate: string | null
+  avg_win_r: string | null
+  avg_loss_r: string | null
+  expectancy_r: string | null
+  total_r: string | null
+  total_pnl_usdt: string
+  profit_factor: string | null
+  max_drawdown_pct: string | null
+  avg_drawdown_pct: string | null
+  total_fees_usdt: string
+  total_slippage_usdt: string | null
+  starting_equity_usdt: string | null
+  filters: PerformanceFilters
 }
 
 export interface RiskConfig {

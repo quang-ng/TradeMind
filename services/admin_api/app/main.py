@@ -13,6 +13,7 @@ from .routers import (
     decisions,
     killswitch,
     orders,
+    performance,
     positions,
     signals,
     webhooks,
@@ -28,6 +29,7 @@ app.include_router(status_router.router)
 app.include_router(signals.router)
 app.include_router(decisions.router)
 app.include_router(positions.router)
+app.include_router(performance.router)
 app.include_router(orders.router)
 app.include_router(audit.router)
 app.include_router(killswitch.router)

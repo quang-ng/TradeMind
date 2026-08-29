@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from admin_api.app.position_service import position_with_mark
 from common.db.models import Position, Signal
 from common.enums import Action, PositionStatus, SignalStatus
+
+from admin_api.app.position_service import position_with_mark
 
 NOW = datetime(2026, 7, 20, 3, 0, tzinfo=timezone.utc)
 
@@ -18,6 +19,10 @@ def _position(*, status: str = PositionStatus.OPEN.value) -> Position:
         entry_price=Decimal("60000"),
         amount=Decimal("0.01"),
         opened_at=NOW,
+        # `fees_estimated` has an insert-time ORM default (applied at flush)
+        # rather than an in-memory one, matching `Order.dry_run`'s existing
+        # pattern — an unflushed fixture like this one must set it explicitly.
+        fees_estimated=False,
     )
 
 

@@ -15,6 +15,15 @@ class SizingResult:
     stop_loss_price: Decimal
     stop_distance_pct: Decimal
     risk_pct_applied: Decimal
+    # Positive-expectancy plan D1: `nominal_risk_amount_usdt` is the
+    # pre-clamp account-level budget (`equity_usdt * risk_per_trade_pct`);
+    # `actual_risk_usdt` is what is truly at stake on *this* trade once
+    # max_position_pct/free-balance/confidence clamps are applied
+    # (`position_size_usdt * stop_distance_pct`) — always <= the nominal
+    # figure, and the one used as the R-multiple denominator everywhere
+    # expectancy math happens (never the nominal budget).
+    nominal_risk_amount_usdt: Decimal
+    actual_risk_usdt: Decimal
 
 
 def _confidence_scale(confidence: Decimal, config: RiskConfig) -> Decimal:
@@ -26,8 +35,11 @@ def _confidence_scale(confidence: Decimal, config: RiskConfig) -> Decimal:
     confidence_range = Decimal("1") - config.min_confidence
     if confidence_range <= 0:
         return Decimal("1")
-    ratio = _clamp((confidence - config.min_confidence) / confidence_range, Decimal("0"), Decimal("1"))
-    return config.min_confidence_size_scale + (Decimal("1") - config.min_confidence_size_scale) * ratio
+    ratio = _clamp(
+        (confidence - config.min_confidence) / confidence_range, Decimal("0"), Decimal("1")
+    )
+    scale = config.min_confidence_size_scale
+    return scale + (Decimal("1") - scale) * ratio
 
 
 def compute_sizing(
@@ -57,9 +69,12 @@ def compute_sizing(
         equity_usdt * config.max_position_pct,
         free_balance_usdt,
     )
-    position_size_usdt = max(position_size_usdt, Decimal("0")) * _confidence_scale(confidence, config)
+    position_size_usdt = max(position_size_usdt, Decimal("0")) * _confidence_scale(
+        confidence, config
+    )
     position_size_base = position_size_usdt / entry_price if entry_price > 0 else Decimal("0")
     stop_loss_price = entry_price * (Decimal("1") - stop_distance_pct)
+    actual_risk_usdt = position_size_usdt * stop_distance_pct
 
     return SizingResult(
         position_size_usdt=position_size_usdt,
@@ -67,4 +82,6 @@ def compute_sizing(
         stop_loss_price=stop_loss_price,
         stop_distance_pct=stop_distance_pct,
         risk_pct_applied=config.risk_per_trade_pct,
+        nominal_risk_amount_usdt=risk_amount_usdt,
+        actual_risk_usdt=actual_risk_usdt,
     )

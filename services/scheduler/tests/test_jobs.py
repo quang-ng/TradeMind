@@ -1,11 +1,12 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
 import pytest
 from common.config import SchedulerSettings
+
 from scheduler.app import jobs
 
 HOUR_MS = 3_600_000
@@ -40,6 +41,9 @@ class FakeRedis:
             return False
         self.store[key] = value
         return True
+
+    async def get(self, key):
+        return self.store.get(key)
 
     async def delete(self, key):
         self.store.pop(key, None)
@@ -208,6 +212,49 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     assert "provider_override" not in signal_row.model_input
     assert len(signal_row.model_input["ohlcv"]) == 4
 
+    # Positive-expectancy plan M2/Section 5: SIGNAL_RECEIVED audited once
+    # per cycle, alongside the Signal row itself.
+    audit_event = captured_session.added[1]
+    assert audit_event.event_type == "SIGNAL_RECEIVED"
+    assert audit_event.payload["signal_id"] == str(signal_row.id)
+    assert audit_event.payload["symbol"] == "BTC/USDT"
+    assert audit_event.payload["action"] == "BUY"
+
+
+async def test_run_cycle_persists_trade_journal_fields_from_the_analyze_response(
+    monkeypatch, settings
+):
+    candles = _candles(25)
+    monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
+    redis_client = FakeRedis()
+    captured_session = FakeSession()
+    payload = {
+        **LLM_PAYLOAD,
+        "trade_score": 72,
+        "score_breakdown": {"trend": 20, "momentum": 15},
+        "setup_regime": "trend_pullback",
+        "volatility_regime": "NORMAL",
+    }
+
+    await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=lambda: captured_session,
+        http_client=_http_client_returning(payload),
+        settings=settings,
+    )
+
+    signal_row = captured_session.added[0]
+    assert signal_row.trade_score == 72
+    assert signal_row.score_breakdown == {"trend": 20, "momentum": 15}
+    assert signal_row.setup_regime == "trend_pullback"
+    assert signal_row.volatility_regime == "NORMAL"
+
+    audit_event = captured_session.added[1]
+    assert audit_event.payload["trade_score"] == 72
+    assert audit_event.payload["setup_regime"] == "trend_pullback"
+    assert audit_event.payload["volatility_regime"] == "NORMAL"
+
 
 async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeypatch, settings):
     candles = _candles(25)
@@ -312,3 +359,110 @@ def _fake_fetch_closed_candles(candles: list[dict]):
         return candles
 
     return _fetch
+
+
+# --- positive-expectancy plan M3: performance snapshot job ---------------
+
+
+class _FakeClosedPosition:
+    def __init__(self, pnl: str, r: str | None, fees: str | None, minutes: int):
+        self.pnl_usdt = Decimal(pnl)
+        self.r_multiple = None if r is None else Decimal(r)
+        self.fees_usdt = None if fees is None else Decimal(fees)
+        self.closed_at = datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(minutes=minutes)
+
+
+class _FakeScalarResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSnapshotSession:
+    def __init__(self, rows):
+        self._rows = rows
+        self.added: list = []
+        self.committed = False
+
+    async def execute(self, _stmt):
+        return _FakeScalarResult(self._rows)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        for obj in self.added:
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+
+    async def commit(self):
+        self.committed = True
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+async def test_recompute_performance_snapshot_writes_a_row():
+    rows = [
+        _FakeClosedPosition("21", "2.1", "0.10", 0),
+        _FakeClosedPosition("-10", "-1.0", "0.10", 30),
+        _FakeClosedPosition("15", None, None, 60),  # legacy row, no R
+    ]
+    session = _FakeSnapshotSession(rows)
+    redis_client = FakeRedis()
+    balance = json.dumps(
+        {
+            "equity_usdt": "1000",
+            "free_balance_usdt": "900",
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    redis_client.store[jobs.redis_keys.ACCOUNT_BALANCE_SNAPSHOT_KEY] = balance
+
+    snapshot_id = await jobs.recompute_performance_snapshot(
+        redis_client=redis_client, session_factory=lambda: session
+    )
+
+    assert snapshot_id is not None
+    assert session.committed
+    (snapshot,) = session.added
+    assert snapshot.trades == 3
+    assert snapshot.trades_with_r == 2
+    assert snapshot.expectancy_r == Decimal("0.55")  # (2.1 - 1.0) / 2
+    assert snapshot.total_fees_usdt == Decimal("0.20")
+    assert snapshot.starting_equity_usdt == Decimal("1000")
+    assert snapshot.max_drawdown_pct is not None
+    assert snapshot.total_slippage_usdt is None
+
+
+async def test_recompute_performance_snapshot_skips_when_no_closed_trades():
+    session = _FakeSnapshotSession([])
+
+    result = await jobs.recompute_performance_snapshot(
+        redis_client=FakeRedis(), session_factory=lambda: session
+    )
+
+    assert result is None
+    assert session.added == []
+
+
+async def test_recompute_performance_snapshot_tolerates_missing_equity_anchor():
+    session = _FakeSnapshotSession([_FakeClosedPosition("-10", "-1.0", "0.10", 0)])
+
+    snapshot_id = await jobs.recompute_performance_snapshot(
+        redis_client=FakeRedis(), session_factory=lambda: session
+    )
+
+    assert snapshot_id is not None
+    (snapshot,) = session.added
+    assert snapshot.starting_equity_usdt is None
+    assert snapshot.max_drawdown_pct is None
+    assert snapshot.expectancy_r == Decimal("-1.0")

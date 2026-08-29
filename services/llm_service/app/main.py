@@ -10,9 +10,11 @@ from .llm.providers import get_provider
 from .llm.providers.base import Provider
 from .models.wire import AnalyzeRequest, ProviderOverride, TradingSignal
 from .prompts.builder import PromptBuilder
+from .scoring.trade_score import TradeScorer
 from .services.pipeline import AnalysisPipeline
 from .signals.generator import SignalGenerator
 from .strategies.selector import StrategySelector
+from .strategies.volatility_classifier import VolatilityClassifier
 from .validators.response_validator import ResponseValidator
 
 configure_json_logging()
@@ -49,6 +51,8 @@ def _build_pipeline(provider: Provider, settings: LLMServiceSettings) -> Analysi
     return AnalysisPipeline(
         context_builder=ContextBuilder(),
         strategy_selector=StrategySelector(),
+        volatility_classifier=VolatilityClassifier(),
+        trade_scorer=TradeScorer(assumed_reward_multiple=settings.assumed_reward_multiple),
         prompt_builder=PromptBuilder(
             include_strategy_context=settings.include_strategy_context_in_prompt
         ),

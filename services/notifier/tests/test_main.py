@@ -5,6 +5,7 @@ from decimal import Decimal
 from common.config import NotifierSettings
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
+
 from notifier.app.main import (
     _describe_window,
     _fetch_status,

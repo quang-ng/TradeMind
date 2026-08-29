@@ -3,12 +3,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from admin_api.app.deps import get_redis_client
-from admin_api.app.main import app
 from common import redis_keys
 from common.account_balance import AccountBalanceSnapshot
 from common.db.models import Order, Position, RiskDecision, Signal
 from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
+
+from admin_api.app.deps import get_redis_client
+from admin_api.app.main import app
 
 
 class FakeRedis:

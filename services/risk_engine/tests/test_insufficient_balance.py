@@ -26,6 +26,8 @@ def test_rejects_when_computed_size_exceeds_free_balance():
         stop_loss_price=Decimal("59000"),
         stop_distance_pct=Decimal("0.0167"),
         risk_pct_applied=Decimal("0.01"),
+        nominal_risk_amount_usdt=Decimal("100"),
+        actual_risk_usdt=Decimal("8.35"),
     )
     ctx = make_context(account=account, candidate=bad_candidate)
     violation = insufficient_balance.check(ctx)

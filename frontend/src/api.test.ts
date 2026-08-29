@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadDashboard, setKillSwitch, triggerCycle } from './api'
+import { getPerformance, loadDashboard, setKillSwitch, triggerCycle } from './api'
 
 const payloads: Record<string, unknown> = {
   '/api/status': {
@@ -65,6 +65,21 @@ describe('Admin API client', () => {
     await triggerCycle('secret-key', 'BTC/USDT')
 
     expect(fetchMock.mock.calls[0][0]).toBe('/api/cycles/BTC-USDT/trigger')
+  })
+
+  it('builds the /performance query string, dropping empty filters', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ trades: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await getPerformance('secret-key', { symbol: 'BTC/USDT', regime: undefined, score_min: 70, score_max: 100 })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/performance?symbol=BTC%2FUSDT&score_min=70&score_max=100')
+
+    await getPerformance('secret-key')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/performance')
   })
 
   it('surfaces typed API errors', async () => {

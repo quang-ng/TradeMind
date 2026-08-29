@@ -19,6 +19,12 @@ export function compactNumber(value: string | number | null, digits = 6): string
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(Number(value))
 }
 
+export function rMultiple(value: string | number | null, digits = 2): string {
+  if (value === null) return '—'
+  const amount = Number(value)
+  return `${amount >= 0 ? '+' : ''}${amount.toFixed(digits)}R`
+}
+
 export function dateTime(value: string | null): string {
   if (!value) return 'Never'
   return new Intl.DateTimeFormat(undefined, {
