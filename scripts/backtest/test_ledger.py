@@ -39,22 +39,23 @@ def _candle(o, h, low, c):
 def test_minimal_roi_matches_updated_decay_table():
     """Guards against the table silently drifting from
     ExternalSignalStrategy.py's minimal_roi again — they must be edited
-    together since the strategy module can't be imported here directly."""
+    together since the strategy module can't be imported here directly.
+    2026-08-31: every tier x3 ("let winners run" — see the strategy file)."""
     assert MINIMAL_ROI == {
-        0: Decimal("0.06"),
-        240: Decimal("0.03"),
-        720: Decimal("0.02"),
-        1440: Decimal("0.015"),
-        2880: Decimal("0.01"),
-        5760: Decimal("0.005"),
+        0: Decimal("0.18"),
+        240: Decimal("0.09"),
+        720: Decimal("0.06"),
+        1440: Decimal("0.045"),
+        2880: Decimal("0.03"),
+        5760: Decimal("0.015"),
     }
 
 
 def test_atr_stop_fires_before_trailing_activates():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
-    # Profit stays under trailing_activation_pct (2%) before the dip through
-    # the ATR stop — must exit at the ATR stop_loss_price, not the old
-    # blunt -8% strategy-wide floor.
+    # Profit stays under trailing_activation_pct (4.5%) before the dip
+    # through the ATR stop — must exit at the ATR stop_loss_price, not the
+    # old blunt -8% strategy-wide floor.
     candle = _candle(o=100.5, h=100.5, low=96.5, c=100.2)
 
     trade = ledger.check_static_exit("BTC/USDT", candle, ENTRY_TIME + timedelta(hours=1))
@@ -67,27 +68,27 @@ def test_atr_stop_fires_before_trailing_activates():
 def test_trailing_stop_locks_in_more_than_the_atr_floor():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
 
-    # Candle 1: runs up to a peak of +2.5% — past trailing_activation_pct
-    # (2%) but under the 0-4h ROI tier's 6% floor, so ROI doesn't preempt
+    # Candle 1: runs up to a peak of +5% — past trailing_activation_pct
+    # (4.5%) but under the 0-4h ROI tier's 18% floor, so ROI doesn't preempt
     # this. Low sits at the open (no intra-candle dip), which stays above
-    # this same candle's own trailing level (102.5*0.985=100.9625), so it
+    # this same candle's own trailing level (105*0.973=102.165), so it
     # doesn't self-trigger either — see the intra-candle ordering note in
     # check_static_exit's docstring.
-    up_candle = _candle(o=101.8, h=102.5, low=101.8, c=102.0)
+    up_candle = _candle(o=104.0, h=105.0, low=104.0, c=104.5)
     assert ledger.check_static_exit("BTC/USDT", up_candle, ENTRY_TIME + timedelta(hours=1)) is None
-    assert ledger.positions["BTC/USDT"].peak_price == Decimal("102.5")
+    assert ledger.positions["BTC/USDT"].peak_price == Decimal("105.0")
 
-    # Candle 2: pulls back through the trail (still anchored to the 102.5
-    # peak, not this candle's lower high of 101.2) while staying well above
+    # Candle 2: pulls back through the trail (still anchored to the 105.0
+    # peak, not this candle's lower high of 104.5) while staying well above
     # the original ATR stop of 97 — the whole point of trailing.
-    pullback_candle = _candle(o=101.0, h=101.2, low=98.0, c=99.0)
+    pullback_candle = _candle(o=104.0, h=104.5, low=100.0, c=101.0)
     trade = ledger.check_static_exit(
         "BTC/USDT", pullback_candle, ENTRY_TIME + timedelta(hours=2)
     )
 
     assert trade is not None
     assert trade.exit_reason == "trailing_stop"
-    assert trade.exit_price == Decimal("100.9625")  # touched, not gapped through
+    assert trade.exit_price == Decimal("102.165")  # touched, not gapped through
     assert trade.exit_price > Decimal("97.0")
 
 
@@ -117,12 +118,13 @@ def test_r_multiple_is_none_without_a_recorded_actual_risk():
     assert trade.r_multiple is None
 
 
-def test_minimal_roi_uses_the_720_minute_tiers_new_2pct_floor():
+def test_minimal_roi_uses_the_720_minute_tiers_floor():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=90.0, peak_price=100.0)
-    # 800 minutes elapsed -> the 720' tier, floor raised from 1.5% to 2% in
-    # the 2026-08-11 update. High just touches the floor without dipping
-    # low enough to trip the (now-active) trailing stop first.
-    candle = _candle(o=101.5, h=102.0, low=101.5, c=101.8)
+    # 800 minutes elapsed -> the 720' tier, floor x3'd from 2% to 6% in the
+    # 2026-08-31 "let winners run" update. High just touches the floor
+    # without dipping low enough to trip the (now-active) trailing stop
+    # first (trail sits at 106*0.973 = 103.138).
+    candle = _candle(o=105.5, h=106.0, low=105.5, c=105.8)
 
     trade = ledger.check_static_exit(
         "BTC/USDT", candle, ENTRY_TIME + timedelta(minutes=800)
@@ -130,4 +132,4 @@ def test_minimal_roi_uses_the_720_minute_tiers_new_2pct_floor():
 
     assert trade is not None
     assert trade.exit_reason == "minimal_roi"
-    assert trade.exit_price == Decimal("102.0")
+    assert trade.exit_price == Decimal("106.0")
