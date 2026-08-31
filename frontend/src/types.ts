@@ -185,6 +185,12 @@ export interface RiskConfig {
   min_stop_loss_pct: string
   max_stop_loss_pct: string
   dry_run: boolean
+  // Positive-expectancy plan M5 (D4) — the Historical Expectancy Filter
+  // ships disabled/shadow-mode; the operator flips `expectancy_filter_enabled`
+  // via PATCH /config after reviewing the shadow data.
+  expectancy_filter_enabled: boolean
+  expectancy_min_sample_size: number
+  expectancy_min_r: string
 }
 
 export interface LLMConfig {

@@ -134,6 +134,24 @@ class RiskConfig(BaseSettings):
     # `scripts/backtest/ledger.py`'s offline `fee_pct` default (Binance spot
     # taker fee, applied once on entry notional and once on exit notional).
     estimated_fee_pct: Decimal = Decimal("0.001")
+    # Positive-expectancy plan M5 (D4) — the Historical Expectancy Filter
+    # (`risk_engine/app/rules/expectancy_filter.py`). Ships DISABLED: it
+    # computes and audits an `expectancy_check` verdict on every evaluated
+    # entry signal but never rejects one until the operator reviews the
+    # accumulated shadow data and flips `expectancy_filter_enabled` on via
+    # the audited `PATCH /config` path — the same human-gated mechanism used
+    # for `dry_run`. `expectancy_min_sample_size` is the minimum count of
+    # R-tracked closed trades in a (regime, score-bucket) cohort before the
+    # filter will act on that cohort's expectancy at all (below it the
+    # filter abstains — absence of evidence is not evidence of a bad setup);
+    # 30 is a placeholder to be tuned once real shadow data exists.
+    # `expectancy_min_r` is the expectancy-R floor: a cohort at or above it
+    # passes, below it (with an adequate sample, filter enabled) is rejected
+    # with `NEGATIVE_EXPECTANCY_SETUP`. Default 0 rejects only proven
+    # negative-expectancy setups.
+    expectancy_filter_enabled: bool = False
+    expectancy_min_sample_size: int = 30
+    expectancy_min_r: Decimal = Decimal("0")
 
 
 class SchedulerSettings(BaseSettings):

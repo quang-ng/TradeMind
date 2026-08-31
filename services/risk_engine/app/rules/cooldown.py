@@ -7,7 +7,7 @@ from .base import RuleViolation
 
 
 def check(ctx: RuleContext) -> RuleViolation | None:
-    """Rule 10 (PROJECT.md Section 9.1) — per-pair cooldown after a position
+    """Rule 11 (PROJECT.md Section 9.1) — per-pair cooldown after a position
     on this pair closes, regardless of win/loss."""
     last_closed = ctx.account.symbol_last_closed_at.get(ctx.signal.symbol)
     if last_closed is None:

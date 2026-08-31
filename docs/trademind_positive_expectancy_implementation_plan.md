@@ -4,7 +4,7 @@
 |---|---|
 | Companion to | `docs/trademind_positive_expectancy_plan.md` (the "why"/vision doc — do not duplicate its principles here, only reference them) |
 | Authority | `PROJECT.md` remains the single source of truth for contracts. This plan proposes changes to it; it does not supersede it. Each milestone below lists the exact `PROJECT.md` sections it must update in the same PR (AGENTS.md Section 6). |
-| Status | M1 (Risk & R), M2 (Trade Journal) and M3 (Performance Engine, incl. the frontend view) implemented — not yet deployed/migrated on the VPS. M4–M6 still proposed, not built. |
+| Status | M1 (Risk & R), M2 (Trade Journal), M3 (Performance Engine, incl. the frontend view), M4 (Regime/Score Backtest Analysis) and M5 (Expectancy Filter — ships inert, D4) implemented — not yet deployed/migrated on the VPS. M6 still proposed, not built. |
 | Audience | Whoever (human or agent) implements M1–M6 below, in order. |
 | Context | System is **live**, trading real money on Binance since 2026-07-27, currently ~$115 equity. Every milestone below is written with that constraint first. |
 
@@ -84,7 +84,7 @@ Backfilling would mean writing computed-after-the-fact values into what PROJECT.
 
 ## 3. Data model changes
 
-All new columns are **nullable and additive-only** — zero behavior change, safe to ship straight to the live system. One migration per milestone (M1–M2 need schema; M5 needs one more), matching AGENTS.md's "one logical change per PR" and this repo's existing `YYYYMMDD_NNNN_description.py` convention (latest on disk: `20260729_0001_consecutive_loss_reset.py`).
+All new columns are **nullable and additive-only** — zero behavior change, safe to ship straight to the live system. Only M1, M2 and M4 need a migration (M5's shadow verdict lands in the `audit_events` payload, not a column — Section 5; `setup_expectancy_stats` stays deferred), matching AGENTS.md's "one logical change per PR" and this repo's existing `YYYYMMDD_NNNN_description.py` convention (latest on disk: `20260729_0001_consecutive_loss_reset.py`).
 
 ### `migrations/versions/20260815_0001_expectancy_journal.py` (M1)
 
@@ -185,7 +185,20 @@ degradation time series, the frontend **Performance** tab (headline R tiles + br
 - Tests: extend `scripts/backtest/test_ledger.py`.
 - No `PROJECT.md` change required (scripts/ isn't part of the audited production contract).
 
-### M5 — Expectancy Filter (ships inert; D4)
+### M5 — Expectancy Filter (ships inert; D4) ✅ implemented (not yet deployed to VPS)
+
+Shipped exactly as specced below: `expectancy_state.py` (`load_expectancy_state`
++ pure `build_expectancy_view` / `setup_key` helpers), `RuleContext.expectancy`,
+`rules/expectancy_filter.py` (rule 6 — `check()` for the reject path,
+`build_expectancy_check()` for the always-on shadow verdict), the
+`NEGATIVE_EXPECTANCY_SETUP` rejection reason, the three `RiskConfig` fields
+(also surfaced on `RiskConfigOut`/`RiskConfigPatch` so `PATCH /config` can flip
+the flag), the `expectancy_check` payload on every `RISK_APPROVED`/`RISK_REJECTED`
+event, and `PROJECT.md` §9.1 (rules renumbered 6→7…12→13) / §9.3 / §11.
+**No migration** — the shadow verdict lives in the audit payload (§5), not a new
+column, and `setup_expectancy_stats` stays deferred. **Setup key is
+`market_regime` + trade-score bucket only** (per this section's loader spec);
+volatility/symbol are a later refinement via the `expectancy_state.py` interface.
 
 **Goal:** Implement the vision doc's Phase 6 pipeline (`Signal → Regime → Score → Historical Setup Performance → Expectancy → Risk Engine → Execute/Reject`) as a new Risk Engine rule, disabled by default.
 

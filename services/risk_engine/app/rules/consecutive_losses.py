@@ -5,7 +5,7 @@ from .base import RuleViolation
 
 
 def check(ctx: RuleContext) -> RuleViolation | None:
-    """Rule 9 (PROJECT.md Section 9.1) — after `consecutive_loss_limit`
+    """Rule 10 (PROJECT.md Section 9.1) — after `consecutive_loss_limit`
     consecutive losing closed positions (any pair), persistently halt new
     entries by auto-tripping the global kill switch.
 

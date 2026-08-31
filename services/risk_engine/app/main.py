@@ -27,9 +27,11 @@ from .account_state import load_account_state
 from .balance_monitor import publish_balance_snapshot, run_balance_refresh_loop
 from .evaluator import RiskDecisionResult, evaluate
 from .exit_evaluator import ExitDecisionResult, evaluate_exit
+from .expectancy_state import load_expectancy_state
 from .freqtrade_client import FreqtradeClient, FreqtradeUnavailable
 from .reconciliation import run_reconciliation_loop
-from .schemas import SignalView
+from .rules.expectancy_filter import ExpectancyCheck
+from .schemas import ExpectancyView, SignalView
 
 configure_json_logging()
 logger = logging.getLogger(__name__)
@@ -75,6 +77,8 @@ async def process_signal(
         candle_ts=signal_row.candle_ts,
         price=Decimal(signal_row.price),
         atr_14=Decimal(signal_row.atr_14),
+        setup_regime=signal_row.setup_regime,
+        trade_score=signal_row.trade_score,
     )
 
     if signal_view.action == Action.SELL:
@@ -83,9 +87,18 @@ async def process_signal(
         )
         return
 
+    # Positive-expectancy plan M5: the setup cohort's historical expectancy,
+    # pre-fetched here (I/O) so `evaluate()` stays pure — same pattern as
+    # `load_account_state` above. Exit signals never reach the entry rule
+    # set, so this is entry-only.
+    expectancy = await load_expectancy_state(
+        session,
+        market_regime=signal_view.setup_regime,
+        trade_score=signal_view.trade_score,
+    )
     await _handle_entry_signal(
         session, redis_client, freqtrade_client, config, signal_row, signal_view, account,
-        is_duplicate,
+        is_duplicate, expectancy,
     )
 
 
@@ -124,6 +137,7 @@ async def _handle_entry_signal(
     signal_view: SignalView,
     account,
     is_duplicate: bool,
+    expectancy: ExpectancyView,
 ) -> None:
     killswitch_enabled = await kill_switch.is_enabled(session)
     try:
@@ -134,6 +148,7 @@ async def _handle_entry_signal(
             now=datetime.now(timezone.utc),
             killswitch_enabled=killswitch_enabled,
             is_duplicate_decision=is_duplicate,
+            expectancy=expectancy,
         )
     except Exception:
         # PROJECT.md Section 9.4: never allowed to propagate into an approval.
@@ -180,6 +195,7 @@ async def _handle_entry_signal(
         nominal_risk_amount_usdt=result.nominal_risk_amount_usdt,
         actual_risk_usdt=result.actual_risk_usdt,
         stop_distance_pct=result.stop_distance_pct,
+        expectancy_check=result.expectancy_check,
     )
 
     if result.approved:
@@ -266,6 +282,7 @@ async def _write_decision_audit_event(
     nominal_risk_amount_usdt: Decimal | None = None,
     actual_risk_usdt: Decimal | None = None,
     stop_distance_pct: Decimal | None = None,
+    expectancy_check: ExpectancyCheck | None = None,
 ) -> None:
     event_type = AuditEventType.RISK_APPROVED if approved else AuditEventType.RISK_REJECTED
     payload = {
@@ -287,6 +304,12 @@ async def _write_decision_audit_event(
         payload["stop_distance_pct"] = (
             str(stop_distance_pct) if stop_distance_pct is not None else None
         )
+    # Positive-expectancy plan M5 (D4): on *every* evaluated entry — approved
+    # or rejected, filter on or off — record what the Historical Expectancy
+    # Filter concluded, so shadow-mode data is reconstructable per-trace from
+    # day one. Absent only on the exit path and the INTERNAL_ERROR fallback.
+    if expectancy_check is not None:
+        payload["expectancy_check"] = expectancy_check.as_payload()
     session.add(
         AuditEvent(
             trace_id=signal_row.trace_id,

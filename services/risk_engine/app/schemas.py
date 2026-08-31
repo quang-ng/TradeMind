@@ -21,6 +21,13 @@ class SignalView:
     candle_ts: datetime
     price: Decimal
     atr_14: Decimal
+    # Positive-expectancy plan M5 — the journal dimensions the expectancy
+    # filter keys its historical-setup lookup on (`Signal.setup_regime` /
+    # `Signal.trade_score`, added to the wire contract in M2). `None` for
+    # signals produced before M2, or when scoring/classification failed —
+    # the filter treats a missing key as "abstain", never "reject".
+    setup_regime: str | None = None
+    trade_score: int | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,26 @@ class AccountState:
 
 
 @dataclass(frozen=True)
+class ExpectancyView:
+    """Historical performance of the current signal's setup cohort
+    (`setup_key` = regime + trade-score bucket), as of decision time
+    (positive-expectancy plan M5). Resolved by
+    `expectancy_state.load_expectancy_state` — which does the Postgres read
+    and the `common.performance` math — *before* the pure `evaluate()` runs,
+    exactly as `AccountState` is, so the rule set stays a pure function of
+    its inputs (PROJECT.md Section 9).
+
+    `sample_size` is the count of R-tracked closed trades in the cohort
+    (trades with no `r_multiple` are excluded from both this and
+    `expectancy_r`, never counted as 0R — plan D5). `expectancy_r` is
+    `None` when the cohort has no R-tracked trade at all."""
+
+    setup_key: str
+    sample_size: int
+    expectancy_r: Decimal | None
+
+
+@dataclass(frozen=True)
 class RuleContext:
     """Everything the pure rule set (PROJECT.md Section 9.1) needs to
     evaluate one signal. Ephemeral, Redis-sourced flags — kill switch,
@@ -48,8 +75,10 @@ class RuleContext:
     function of its inputs (Section 9: "The Risk Engine is a pure,
     deterministic function..."). `candidate` is the position size/stop that
     would be attached if the signal is ultimately approved — computed once,
-    up front, so rules 7 and 11 can evaluate it without recomputing sizing
-    mid-pipeline."""
+    up front, so rules 8 and 12 can evaluate it without recomputing sizing
+    mid-pipeline. `expectancy` is the current setup cohort's historical
+    performance, pre-fetched the same way `account` is (positive-expectancy
+    plan M5)."""
 
     signal: SignalView
     account: AccountState
@@ -58,6 +87,7 @@ class RuleContext:
     killswitch_enabled: bool
     is_duplicate_decision: bool
     candidate: SizingResult
+    expectancy: ExpectancyView
 
 
 class FreqtradeTrade(BaseModel):

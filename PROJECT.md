@@ -739,7 +739,10 @@ non-negative USDT stake row. There is no configured-equity fallback.
   "atr_stop_multiplier": 2.0,
   "min_stop_loss_pct": 0.015,
   "max_stop_loss_pct": 0.08,
-  "dry_run": true
+  "dry_run": true,
+  "expectancy_filter_enabled": false,
+  "expectancy_min_sample_size": 30,
+  "expectancy_min_r": 0
 }
 ```
 
@@ -750,15 +753,18 @@ non-negative USDT stake row. There is no configured-equity fallback.
 | 3 | Signal action | `action != HOLD` | `action = HOLD` is never "rejected" — it's recorded as `approved=false, reason=SIGNAL_WAS_HOLD` and generates no order |
 | 4 | Signal staleness | `signal_max_age_minutes = 65` | If `now - candle_close_time` (plus processing delay) exceeds this, reject with `STALE_SIGNAL`; 65 minutes covers the configured 16-symbol stagger across one 1-hour cycle plus bounded processing delay |
 | 5 | Minimum confidence | `min_confidence = 0.70` | Reject with `LOW_CONFIDENCE` |
-| 6 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
-| 7 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
-| 8 | Max daily loss (circuit breaker) | `max_daily_loss_pct = 3%` | If realized+unrealized daily PnL ≤ `-3%` of equity, **auto-enable the global kill switch** (`SYSTEM` actor) and reject with `DAILY_LOSS_LIMIT_HIT` |
-| 9 | Consecutive losses | `consecutive_loss_limit = 3` | After 3 consecutive losing closed positions since the last explicit operator reset, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. Disabling the kill switch records a reset boundary without deleting or modifying position history; only losses closed after that boundary form the next streak |
-| 10 | Per-pair cooldown | `cooldown_minutes = 120` | Reject with `COOLDOWN_ACTIVE` if a position on this pair closed within the cooldown window |
-| 11 | Insufficient balance | Freqtrade-reported free balance | Reject with `INSUFFICIENT_BALANCE` if computed size exceeds available funds |
-| 12 | Stop-loss required | every approved entry carries a stop | No conditional — stop-loss price is always computed and attached (Section 9.2); this is not a rejection rule, it's an invariant of approval |
+| 6 | Historical expectancy filter | `expectancy_filter_enabled = false`, `expectancy_min_sample_size = 30`, `expectancy_min_r = 0` | **Ships disabled (positive-expectancy plan D4).** When disabled — the default — always passes; it only records an `expectancy_check` verdict (see below). When enabled: reject with `NEGATIVE_EXPECTANCY_SETUP` if the signal's setup cohort (market regime + trade-score bucket) has ≥ `expectancy_min_sample_size` R-tracked closed trades **and** a realized `expectancy_r < expectancy_min_r`. Below the sample threshold, or with no history, it abstains (never rejects). An entry-quality gate placed ahead of the portfolio/capital rules, never a way to approve what a later rule rejects |
+| 7 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
+| 8 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
+| 9 | Max daily loss (circuit breaker) | `max_daily_loss_pct = 3%` | If realized+unrealized daily PnL ≤ `-3%` of equity, **auto-enable the global kill switch** (`SYSTEM` actor) and reject with `DAILY_LOSS_LIMIT_HIT` |
+| 10 | Consecutive losses | `consecutive_loss_limit = 3` | After 3 consecutive losing closed positions since the last explicit operator reset, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. Disabling the kill switch records a reset boundary without deleting or modifying position history; only losses closed after that boundary form the next streak |
+| 11 | Per-pair cooldown | `cooldown_minutes = 120` | Reject with `COOLDOWN_ACTIVE` if a position on this pair closed within the cooldown window |
+| 12 | Insufficient balance | Freqtrade-reported free balance | Reject with `INSUFFICIENT_BALANCE` if computed size exceeds available funds |
+| 13 | Stop-loss required | every approved entry carries a stop | No conditional — stop-loss price is always computed and attached (Section 9.2); this is not a rejection rule, it's an invariant of approval |
 
 Rules are evaluated in the listed order; the **first** failing rule determines `rejection_reason` (rules are short-circuited — a stale signal that also has low confidence is reported as `STALE_SIGNAL`, not both).
+
+**Rule 6 — shadow mode (positive-expectancy plan Phase 6 / M5, operator decision D4).** The system is live with real money and holds only ~1 month of history, so this rule ships fully built but **disabled by default** and is never bundled into the same change that would enable it. On every evaluated entry — approved, or rejected by any rule, filter enabled or not — the Risk Engine records an `expectancy_check` in the decision's `RISK_APPROVED`/`RISK_REJECTED` audit payload: `{setup_key, sample_size, historical_expectancy_r, decision (ALLOW | INSUFFICIENT_DATA | NEGATIVE_EXPECTANCY), enforced}`. This accumulates weeks of "what the filter *would* have done" without changing any trade outcome. Only after reviewing that shadow data (and M6's walk-forward output) does the operator flip `expectancy_filter_enabled` via the audited `PATCH /config` path — the same human-gated mechanism used for `dry_run`. The cohort's expectancy is the realized `Expectancy(R)` from the closed-position journal (`common/performance.py`), 1R being `RiskDecision.actual_risk_usdt` (Section 9.2 / plan D1); trades with no `r_multiple` are excluded, never counted as 0R (plan D5). Pre-fetched into the rule context by `risk_engine/app/expectancy_state.py` before the pure `evaluate()` runs, exactly as account state is.
 
 ### 9.1.1 Exit evaluation (`SELL` signals)
 
@@ -811,7 +817,7 @@ Because this table is the only exit mechanism that fires unconditionally on a ti
 
 ### 9.3 Rejection reasons (enum)
 
-`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`, `FREQTRADE_BALANCE_UNAVAILABLE` (authenticated balance missing/invalid), `INTERNAL_ERROR` (Section 9.4's unhandled-exception fallback), `NO_POSITION_TO_EXIT` (Section 9.1.1)
+`LOW_CONFIDENCE`, `STALE_SIGNAL`, `SIGNAL_WAS_HOLD`, `NEGATIVE_EXPECTANCY_SETUP` (rule 6 — only ever reported once `expectancy_filter_enabled` is manually flipped on; D4), `MAX_POSITIONS_REACHED`, `MAX_EXPOSURE_REACHED`, `DAILY_LOSS_LIMIT_HIT`, `CONSECUTIVE_LOSS_PAUSE`, `COOLDOWN_ACTIVE`, `KILLSWITCH_ACTIVE`, `DUPLICATE_SIGNAL`, `INSUFFICIENT_BALANCE`, `INVALID_SIGNAL_SCHEMA`, `FREQTRADE_BALANCE_UNAVAILABLE` (authenticated balance missing/invalid), `INTERNAL_ERROR` (Section 9.4's unhandled-exception fallback), `NO_POSITION_TO_EXIT` (Section 9.1.1)
 
 ### 9.4 Failure Modes & Safe Defaults
 
@@ -889,7 +895,7 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 | `signals:latest:{symbol}` | string (cached JSON) | = timeframe | Fast read for the admin API's `/status` endpoint |
 | `account:balance:latest` | string (typed JSON) | 90 sec | Latest authenticated Freqtrade equity/free-USDT snapshot. Refreshed every 30 seconds by Risk Engine and invalidated on any refresh failure; Admin `/status` returns `503` when absent, invalid, or stale |
 | `killswitch:global` | string (`"1"`/`"0"`) | none — persistent | Cached mirror of `system_state.killswitch_enabled`; Postgres is authoritative, this is read on every Risk Engine evaluation for latency |
-| `cooldown:{symbol}` | string | = `cooldown_minutes` | Set when a position on `{symbol}` closes; presence blocks new entries (Rule 10) |
+| `cooldown:{symbol}` | string | = `cooldown_minutes` | Set when a position on `{symbol}` closes; presence blocks new entries (Rule 11) |
 | `ratelimit:llm:{provider}` | counter | 1 min sliding window | Client-side rate limiting of LLM calls |
 
 `killswitch:global` is the one key without a TTL by design (Section 14) — a coordination flag that silently expired would fail *open*, which is exactly the failure mode this system must never have. Every write to it is paired with a synchronous write to `system_state` in Postgres in the same request, Postgres write first — if the Postgres write fails, the Redis write is not attempted, keeping Postgres authoritative.
@@ -917,7 +923,7 @@ The React Operator Console is served on host loopback port `3000` by default and
 | `POST` | `/killswitch/enable` | `{ "reason": string }` — halt all new entries immediately | API key |
 | `POST` | `/killswitch/disable` | `{ "reason": string }` — resume normal operation and acknowledge the prior consecutive-loss streak | API key |
 | `GET` | `/config` | Current risk engine parameters (Section 9.1 shape) | API key |
-| `PATCH` | `/config` | Update risk parameters; writes `CONFIG_CHANGED` audit event | API key (Section 14: `dry_run` flips require extra confirmation) |
+| `PATCH` | `/config` | Update risk parameters; writes `CONFIG_CHANGED` audit event. Also the sole path for taking rule 6 (historical expectancy filter) out of shadow mode — `{"expectancy_filter_enabled": true}` (D4) | API key (Section 14: `dry_run` flips require extra confirmation) |
 | `GET` | `/config/llm` | Current effective LLM provider/model/temperature (Section 8.4 shape) | API key |
 | `PATCH` | `/config/llm` | Update LLM provider/model/temperature; writes `CONFIG_CHANGED` audit event; takes effect on the Scheduler's next cycle | API key |
 | `POST` | `/cycles/{symbol}/trigger` | Manually trigger a cycle out-of-band (debugging), subject to all normal risk rules | API key |
@@ -995,7 +1001,7 @@ The Telegram bot supports the same two kill-switch actions as slash commands (`/
 |---|---|---|
 | **0 — Foundations** | Repo scaffold, `docker-compose.yml` (Postgres, Redis), Alembic init, base FastAPI `/health`, CI (lint + test) | `docker compose up` boots an empty stack; `/health` returns 200; CI green on an empty commit |
 | **1 — Data & LLM Integration** | Market data fetcher, indicator computation, advisory Market Sentiment Engine, LLM Analysis Service with schema validation and `HOLD` fallback, provider interface + one implementation | Given a fixed historical candle fixture, the service returns a schema-valid `Signal` for the configured symbols; a fixture with malformed LLM output is proven, via test, to fall back to `HOLD` |
-| **2 — Risk Engine** | All 12 rules (Section 9.1), position sizing, Redis locks/idempotency, Postgres persistence for `Signal`/`RiskDecision`/`AuditEvent` | One passing unit test per rule; a property-based test proves position size never exceeds `max_position_pct` or `free_balance` under randomized inputs |
+| **2 — Risk Engine** | All Section 9.1 rules (12 at the time; rule 6, the historical expectancy filter, was appended later under the positive-expectancy plan), position sizing, Redis locks/idempotency, Postgres persistence for `Signal`/`RiskDecision`/`AuditEvent` | One passing unit test per rule; a property-based test proves position size never exceeds `max_position_pct` or `free_balance` under randomized inputs |
 | **3 — Freqtrade Execution (dry-run)** | Freqtrade container + `ExternalSignalStrategy`, `forceenter`/`forceexit` integration, webhook receiver, `Order`/`Position` persistence | A manually triggered end-to-end dry-run trade goes from `Signal` → `RiskDecision` → `Order(FILLED)` → `Position(OPEN)`, visible identically in Postgres and the Freqtrade UI |
 | **4 — Admin API, Console & Notifications** | Full endpoint set (Section 11), React operator console, Telegram notifications on every audit event, kill switch wired end-to-end through Administration Zone clients | Operator can fully observe signals, decisions, money, orders, positions, and audit traces and halt trading without SSH/server access |
 | **5 — Hardening & Scheduling** | Real APScheduler cron on candle closes for every configured symbol, chaos tests (kill Redis/Postgres/LLM/Freqtrade mid-cycle), orphaned-order reconciliation job, docs pass | All items in Section 13 pass; a 72-hour unattended dry-run produces zero unhandled exceptions and a fully reconstructable audit trail for every cycle |
