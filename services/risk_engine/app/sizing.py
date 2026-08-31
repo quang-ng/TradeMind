@@ -54,7 +54,7 @@ def compute_sizing(
     """PROJECT.md Section 9.2 — fixed-fractional risk sizing using ATR for
     stop distance, long-only (MVP). All arithmetic is `Decimal`, never
     `float` (PROJECT.md Section 14 rule 10). `stop_loss_price` is always
-    computed and attached — rule 12 (Section 9.1) is an invariant of this
+    computed and attached — rule 13 (Section 9.1) is an invariant of this
     function, not a separate rejection check."""
     risk_amount_usdt = equity_usdt * config.risk_per_trade_pct
     stop_distance_pct = _clamp(

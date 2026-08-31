@@ -5,7 +5,7 @@ from decimal import Decimal
 from common.enums import Action
 from risk_engine.app.evaluator import evaluate
 from risk_engine.app.exit_evaluator import evaluate_exit
-from risk_engine.app.schemas import AccountState, SignalView
+from risk_engine.app.schemas import AccountState, ExpectancyView, SignalView
 
 from .metrics import build_summary
 from .schemas import (
@@ -17,6 +17,12 @@ from .schemas import (
     ReplayTrade,
     SyntheticSignal,
 )
+
+# This offline replay does not model per-setup historical expectancy, so the
+# M5 expectancy filter always sees an empty cohort and abstains — its
+# default (disabled) behaviour anyway. `scripts/backtest` is where
+# expectancy reporting lives (positive-expectancy plan M4).
+_NO_EXPECTANCY = ExpectancyView(setup_key="(replay)", sample_size=0, expectancy_r=None)
 
 
 @dataclass
@@ -284,6 +290,7 @@ class ReplaySimulator:
                 now=candle.close_time,
                 killswitch_enabled=self.killswitch_enabled,
                 is_duplicate_decision=duplicate,
+                expectancy=_NO_EXPECTANCY,
             )
             side = "BUY" if result.approved else None
             if result.auto_trip_killswitch:

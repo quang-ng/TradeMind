@@ -10,7 +10,7 @@ from common.config import RiskConfig
 from common.enums import Action
 
 from risk_engine.app import sizing
-from risk_engine.app.schemas import AccountState, RuleContext, SignalView
+from risk_engine.app.schemas import AccountState, ExpectancyView, RuleContext, SignalView
 from risk_engine.app.sizing import SizingResult
 
 NOW = datetime(2026, 7, 15, 13, 0, tzinfo=timezone.utc)
@@ -25,9 +25,24 @@ def make_signal(**overrides) -> SignalView:
         candle_ts=NOW - timedelta(minutes=1),
         price=Decimal("60000"),
         atr_14=Decimal("500"),
+        setup_regime="trend_pullback",
+        trade_score=75,
     )
     defaults.update(overrides)
     return SignalView(**defaults)
+
+
+def make_expectancy(**overrides) -> ExpectancyView:
+    """Default: an empty cohort — no history, so the expectancy filter
+    abstains. Rule tests that care about the filter override `sample_size`
+    and `expectancy_r`; every other test just needs a valid object."""
+    defaults = dict(
+        setup_key="trend_pullback | 70–100",
+        sample_size=0,
+        expectancy_r=None,
+    )
+    defaults.update(overrides)
+    return ExpectancyView(**defaults)
 
 
 def make_account(**overrides) -> AccountState:
@@ -54,6 +69,7 @@ def make_context(
     killswitch_enabled: bool = False,
     is_duplicate_decision: bool = False,
     candidate: SizingResult | None = None,
+    expectancy: ExpectancyView | None = None,
 ) -> RuleContext:
     signal = signal or make_signal()
     account = account or make_account()
@@ -74,4 +90,5 @@ def make_context(
         killswitch_enabled=killswitch_enabled,
         is_duplicate_decision=is_duplicate_decision,
         candidate=candidate,
+        expectancy=expectancy or make_expectancy(),
     )

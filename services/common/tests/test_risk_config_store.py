@@ -62,3 +62,25 @@ async def test_patch_merges_with_previous_overrides_instead_of_replacing(db_sess
         effective = await load_effective_risk_config(session)
     assert effective.min_confidence == Decimal("0.80")
     assert effective.cooldown_minutes == 30
+
+
+async def test_expectancy_filter_flag_defaults_off_and_round_trips_through_patch(
+    db_session_factory,
+):
+    """Positive-expectancy plan M5 / D4 — the filter ships disabled and is
+    taken out of shadow mode only via this audited PATCH path."""
+    async with db_session_factory() as session:
+        assert (await load_effective_risk_config(session)).expectancy_filter_enabled is False
+
+    async with db_session_factory() as session:
+        effective = await apply_risk_config_patch(
+            session, {"expectancy_filter_enabled": True, "expectancy_min_r": Decimal("0.1")}
+        )
+        await session.commit()
+    assert effective.expectancy_filter_enabled is True
+
+    async with db_session_factory() as session:
+        reloaded = await load_effective_risk_config(session)
+    assert reloaded.expectancy_filter_enabled is True
+    assert reloaded.expectancy_min_r == Decimal("0.1")
+    assert reloaded.expectancy_min_sample_size == RiskConfig().expectancy_min_sample_size

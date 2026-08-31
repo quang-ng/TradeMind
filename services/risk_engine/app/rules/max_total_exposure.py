@@ -5,7 +5,7 @@ from .base import RuleViolation
 
 
 def check(ctx: RuleContext) -> RuleViolation | None:
-    """Rule 7 (PROJECT.md Section 9.1) — reject if adding the candidate
+    """Rule 8 (PROJECT.md Section 9.1) — reject if adding the candidate
     position (Section 9.2 sizing, computed up front) would push total
     exposure past the cap."""
     prospective_total = ctx.account.total_exposure_usdt + ctx.candidate.position_size_usdt

@@ -5,7 +5,13 @@ from decimal import Decimal
 from common.config import RiskConfig
 from risk_engine.app.evaluator import evaluate
 from risk_engine.app.exit_evaluator import evaluate_exit
-from risk_engine.app.schemas import AccountState, SignalView
+from risk_engine.app.schemas import AccountState, ExpectancyView, SignalView
+
+# The offline ledger does not (yet) feed the M5 historical-expectancy filter
+# a per-setup cohort, so it always sees an empty view and abstains — its
+# default (disabled) behaviour. Expectancy *reporting* over a replay lives
+# in mechanical_replay.py / expectancy_report.py (positive-expectancy M4).
+_NO_EXPECTANCY = ExpectancyView(setup_key="(backtest)", sample_size=0, expectancy_r=None)
 
 # Mirrors freqtrade/user_data/strategies/ExternalSignalStrategy.py: the
 # safety nets that fire independent of any LLM signal. Kept here instead of
@@ -259,6 +265,7 @@ class Ledger:
             now=now,
             killswitch_enabled=self.killswitch_tripped and not self.ignore_killswitch,
             is_duplicate_decision=False,
+            expectancy=_NO_EXPECTANCY,
         )
         if result.auto_trip_killswitch:
             self.killswitch_tripped = True

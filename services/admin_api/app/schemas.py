@@ -275,6 +275,12 @@ class RiskConfigOut(BaseModel):
     min_stop_loss_pct: Decimal
     max_stop_loss_pct: Decimal
     dry_run: bool
+    # Positive-expectancy plan M5 (D4) — surfaced so the operator can see
+    # the current shadow/enforced state and flip `expectancy_filter_enabled`
+    # via `PATCH /config` after reviewing the accumulated shadow data.
+    expectancy_filter_enabled: bool
+    expectancy_min_sample_size: int
+    expectancy_min_r: Decimal
 
 
 class RiskConfigPatch(BaseModel):
@@ -291,6 +297,14 @@ class RiskConfigPatch(BaseModel):
     min_stop_loss_pct: Decimal | None = None
     max_stop_loss_pct: Decimal | None = None
     dry_run: bool | None = None
+    # Positive-expectancy plan M5 (D4): flipping `expectancy_filter_enabled`
+    # from its shipped `False` is the deliberate, audited operator action
+    # that takes the Historical Expectancy Filter out of shadow mode. Not
+    # confirmation-gated the way `dry_run` is — it only ever makes the Risk
+    # Engine stricter, never enables live trading.
+    expectancy_filter_enabled: bool | None = None
+    expectancy_min_sample_size: int | None = Field(default=None, ge=1)
+    expectancy_min_r: Decimal | None = None
     # PROJECT.md Section 14 rule 13: flipping `dry_run` is a deliberate
     # human decision, gated by explicit confirmation in this flow.
     confirm_dry_run_change: bool = False

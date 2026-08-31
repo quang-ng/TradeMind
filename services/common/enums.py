@@ -29,6 +29,11 @@ class RejectionReason(str, Enum):
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
     STALE_SIGNAL = "STALE_SIGNAL"
     SIGNAL_WAS_HOLD = "SIGNAL_WAS_HOLD"
+    # Positive-expectancy plan M5 — the setup (regime + score bucket) has a
+    # statistically sufficient, proven-negative historical expectancy. Only
+    # ever reported when `expectancy_filter_enabled` has been manually
+    # flipped on via `PATCH /config` (D4: ships disabled, shadow-mode only).
+    NEGATIVE_EXPECTANCY_SETUP = "NEGATIVE_EXPECTANCY_SETUP"
     MAX_POSITIONS_REACHED = "MAX_POSITIONS_REACHED"
     MAX_EXPOSURE_REACHED = "MAX_EXPOSURE_REACHED"
     DAILY_LOSS_LIMIT_HIT = "DAILY_LOSS_LIMIT_HIT"

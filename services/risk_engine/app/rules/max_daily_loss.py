@@ -5,7 +5,7 @@ from .base import RuleViolation
 
 
 def check(ctx: RuleContext) -> RuleViolation | None:
-    """Rule 8 (PROJECT.md Section 9.1) — the daily-loss circuit breaker.
+    """Rule 9 (PROJECT.md Section 9.1) — the daily-loss circuit breaker.
     Violating this rule also auto-enables the global kill switch (`SYSTEM`
     actor); the caller (evaluator.py) is responsible for performing that
     side effect, since rule functions stay pure."""
