@@ -364,6 +364,7 @@ async def run(args: argparse.Namespace) -> None:
 
     candle_cache.close()
     print_summary(ledger, candles_by_symbol, trade_regimes, trade_scores, trade_volatility)
+    return ledger, candles_by_symbol, trade_regimes, trade_scores, trade_volatility
 
 
 def print_summary(

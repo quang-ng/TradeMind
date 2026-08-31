@@ -44,13 +44,27 @@ class ExternalSignalStrategy(IStrategy):
     # out in time (each tier now roughly halves, out to 96h) so a winner
     # gets more time for either the trend to keep running or the rubric to
     # find a real reversal, before the timer settles for a small win.
+    #
+    # 2026-08-31: every tier scaled x3 ("let winners run" — realized
+    # reward:risk was ~0.7:1 because winners were capped near +2% while the
+    # unchanged -1.5% ATR stop / hard_loss_cut bounded losers). A take-profit
+    # sweep through scripts/backtest/exit_tuning_matrix.py (mechanical replay,
+    # BTC/ETH/SOL/XRP, 1h, 7.5 months + a held-out 3.5-month window, stop and
+    # hard_loss_cut left untouched) found expectancy improving monotonically
+    # as the table widened — -0.30R -> -0.20R at x3 -> -0.16R at x4, both
+    # windows agreeing, average $ loss/trade flat throughout (the stop, not
+    # ROI, bounds losers). x3 chosen over x4 as the point past which the edge
+    # leans entirely on trends continuing — one 2026 cycle can't test a
+    # ranging regime. TRAILING_ACTIVATION_PCT/DISTANCE below moved in step
+    # (see that comment): a wider ROI does nothing if the trail still banks
+    # winners at +2%.
     minimal_roi = {
-        "0": 0.06,
-        "240": 0.03,
-        "720": 0.02,
-        "1440": 0.015,
-        "2880": 0.01,
-        "5760": 0.005,
+        "0": 0.18,
+        "240": 0.09,
+        "720": 0.06,
+        "1440": 0.045,
+        "2880": 0.03,
+        "5760": 0.015,
     }
     # Conservative static floor — see class docstring. Also the fallback
     # used by custom_stoploss() below whenever the per-trade tag is absent
@@ -84,8 +98,17 @@ class ExternalSignalStrategy(IStrategy):
     # margin) had this run's best realized P&L and average trailing-exit
     # gain of the combinations tested. Re-run the grid before changing
     # either number again — don't hand-tune just one.
-    trailing_activation_pct = 0.02
-    trailing_distance_pct = 0.015
+    #
+    # 2026-08-31: moved to 4.5%/2.7% alongside the x3 minimal_roi rescale
+    # above — a wider take-profit table is inert if the trail still banks
+    # every winner near +2%. The margin (activation - distance) is now 1.8%,
+    # well above the 0.75%-margin point the grid above tied to a ~21%
+    # negative-exit rate, so this is a move in the safe direction on that
+    # axis; the sweep (exit_tuning_matrix.py) held win rate flat at ~32%
+    # across the whole range. Still a coupled hand-tune — re-run the full
+    # grid before touching either number independently.
+    trailing_activation_pct = 0.045
+    trailing_distance_pct = 0.027
 
     process_only_new_candles = True
     use_exit_signal = False

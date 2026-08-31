@@ -27,17 +27,23 @@ _NO_EXPECTANCY = ExpectancyView(setup_key="(backtest)", sample_size=0, expectanc
 # 1%/0.75% (a grid search run through this same module found the *margin*
 # between the two, not either number alone, drives how often the trail
 # gets gapped through for a net loss).
+#
+# 2026-08-31: MINIMAL_ROI x3 + trailing to 4.5%/2.7%, mirroring the same-day
+# "let winners run" change in ExternalSignalStrategy.py (see its comments for
+# the take-profit sweep that picked x3). The ATR stop / hard_loss_cut were
+# deliberately left untouched. Keep this block byte-for-byte in step with
+# that file.
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
-    0: Decimal("0.06"),
-    240: Decimal("0.03"),
-    720: Decimal("0.02"),
-    1440: Decimal("0.015"),
-    2880: Decimal("0.01"),
-    5760: Decimal("0.005"),
+    0: Decimal("0.18"),
+    240: Decimal("0.09"),
+    720: Decimal("0.06"),
+    1440: Decimal("0.045"),
+    2880: Decimal("0.03"),
+    5760: Decimal("0.015"),
 }
-TRAILING_ACTIVATION_PCT = Decimal("0.02")
-TRAILING_DISTANCE_PCT = Decimal("0.015")
+TRAILING_ACTIVATION_PCT = Decimal("0.045")
+TRAILING_DISTANCE_PCT = Decimal("0.027")
 
 
 @dataclass

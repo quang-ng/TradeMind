@@ -70,9 +70,9 @@ def test_malformed_relative_stop_tag_falls_back_to_static_stop(monkeypatch):
 
 def test_trailing_stop_activates_and_wins_when_tighter_than_atr_stop(monkeypatch):
     strategy = _load_strategy(monkeypatch)
-    # 5% profit clears trailing_activation_pct (2%); the trade ran up to
-    # max_rate=110 since entry, so trailing 1.5% behind that peak (108.35)
-    # is tighter than the 2%-from-open ATR stop (98.0) and should win.
+    # 10% peak profit clears trailing_activation_pct (4.5%); the trade ran
+    # up to max_rate=110 since entry, so trailing 2.7% behind that peak
+    # (107.03) is tighter than the 2%-from-open ATR stop (98.0) and wins.
     trade = SimpleNamespace(enter_tag="slpct:0.02", open_rate=100.0, max_rate=110.0)
 
     result = strategy.custom_stoploss(
@@ -84,14 +84,14 @@ def test_trailing_stop_activates_and_wins_when_tighter_than_atr_stop(monkeypatch
         after_fill=True,
     )
 
-    assert result == pytest.approx((108.35, 109.0))
+    assert result == pytest.approx((107.03, 109.0))
 
 
 def test_trailing_stop_anchors_to_peak_not_current_rate(monkeypatch):
     strategy = _load_strategy(monkeypatch)
     # Price has pulled back from an earlier peak (max_rate=115) to
-    # current_rate=112. Trailing must stay anchored to the peak
-    # (115 * 0.985 = 113.275), not slip down to trail current_rate
+    # current_rate=111. Trailing must stay anchored to the peak
+    # (115 * 0.973 = 111.895), not slip down to trail current_rate
     # instead — that peak-anchored stop already sits above current_rate,
     # i.e. this pullback would trigger the exit, which is the point of a
     # trailing stop.
@@ -101,12 +101,12 @@ def test_trailing_stop_anchors_to_peak_not_current_rate(monkeypatch):
         "BTC/USDT",
         trade,
         current_time=None,
-        current_rate=112.0,
-        current_profit=0.12,
+        current_rate=111.0,
+        current_profit=0.11,
         after_fill=True,
     )
 
-    assert result == pytest.approx((113.275, 112.0))
+    assert result == pytest.approx((111.895, 111.0))
 
 
 def test_trailing_stop_stays_active_when_current_profit_has_pulled_back(monkeypatch):
@@ -115,7 +115,7 @@ def test_trailing_stop_stays_active_when_current_profit_has_pulled_back(monkeypa
     # since fallen to -2% (a sharp pullback). Gating activation on
     # current_profit instead of peak profit would silently drop back to
     # the raw ATR stop right when the trailing protection matters most —
-    # this asserts the peak-derived trail (108.35) still wins.
+    # this asserts the peak-derived trail (107.03) still wins.
     trade = SimpleNamespace(enter_tag="slpct:0.02", open_rate=100.0, max_rate=110.0)
 
     result = strategy.custom_stoploss(
@@ -127,4 +127,4 @@ def test_trailing_stop_stays_active_when_current_profit_has_pulled_back(monkeypa
         after_fill=True,
     )
 
-    assert result == pytest.approx((108.35, 98.0))
+    assert result == pytest.approx((107.03, 98.0))
