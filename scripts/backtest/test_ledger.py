@@ -40,9 +40,11 @@ def test_minimal_roi_matches_updated_decay_table():
     """Guards against the table silently drifting from
     ExternalSignalStrategy.py's minimal_roi again — they must be edited
     together since the strategy module can't be imported here directly.
-    2026-08-31: every tier x3 ("let winners run" — see the strategy file)."""
+    2026-08-31: every tier x3 ("let winners run" — see the strategy file).
+    2026-09-05: "0" tier walked back 18% -> 10% (issue #19 first live-trade
+    check)."""
     assert MINIMAL_ROI == {
-        0: Decimal("0.18"),
+        0: Decimal("0.10"),
         240: Decimal("0.09"),
         720: Decimal("0.06"),
         1440: Decimal("0.045"),
@@ -69,7 +71,7 @@ def test_trailing_stop_locks_in_more_than_the_atr_floor():
     ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
 
     # Candle 1: runs up to a peak of +5% — past trailing_activation_pct
-    # (4.5%) but under the 0-4h ROI tier's 18% floor, so ROI doesn't preempt
+    # (4.5%) but under the 0-4h ROI tier's 10% floor, so ROI doesn't preempt
     # this. Low sits at the open (no intra-candle dip), which stays above
     # this same candle's own trailing level (105*0.973=102.165), so it
     # doesn't self-trigger either — see the intra-candle ordering note in

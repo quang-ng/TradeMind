@@ -33,9 +33,13 @@ _NO_EXPECTANCY = ExpectancyView(setup_key="(backtest)", sample_size=0, expectanc
 # the take-profit sweep that picked x3). The ATR stop / hard_loss_cut were
 # deliberately left untouched. Keep this block byte-for-byte in step with
 # that file.
+#
+# 2026-09-05: "0" tier walked back 18% -> 10% per issue #19's first
+# live-trade check (see ExternalSignalStrategy.py's minimal_roi comment for
+# the data). Every other tier and the trailing pair are unchanged.
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
-    0: Decimal("0.18"),
+    0: Decimal("0.10"),
     240: Decimal("0.09"),
     720: Decimal("0.06"),
     1440: Decimal("0.045"),

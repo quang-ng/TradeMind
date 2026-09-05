@@ -58,8 +58,22 @@ class ExternalSignalStrategy(IStrategy):
     # ranging regime. TRAILING_ACTIVATION_PCT/DISTANCE below moved in step
     # (see that comment): a wider ROI does nothing if the trail still banks
     # winners at +2%.
+    #
+    # 2026-09-05: partial walk-back of the "0" tier only, 18% -> 10% (issue
+    # #19's first live-trade check). All 6 trades closed since the 08-31
+    # deploy lost, and every one of them ran up to +1.1%-+2.4% unrealized
+    # before reversing — the exact "winners round-tripping" risk that PR #18
+    # flagged, and half of them peaked above the *old* 2% trailing-activation
+    # bar (i.e. would likely have locked in a small win under the pre-PR#18
+    # config). n=6 is still below the ~15-trade noise floor the issue sets,
+    # so this is a partial hedge, not a full revert: the "0" tier alone comes
+    # back down (still above the pre-PR#18 6% baseline) so a fast, hard
+    # reversal within the first 4h gets some profit-lock again, while every
+    # other tier and the 4.5%/2.7% trailing stay untouched to keep testing
+    # whether the wider trail can bank a real trend winner. Re-check via
+    # issue #19 same as before.
     minimal_roi = {
-        "0": 0.18,
+        "0": 0.10,
         "240": 0.09,
         "720": 0.06,
         "1440": 0.045,
