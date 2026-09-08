@@ -60,25 +60,31 @@ class ExternalSignalStrategy(IStrategy):
     # winners at +2%.
     #
     # 2026-09-05: partial walk-back of the "0" tier only, 18% -> 10% (issue
-    # #19's first live-trade check). All 6 trades closed since the 08-31
-    # deploy lost, and every one of them ran up to +1.1%-+2.4% unrealized
-    # before reversing — the exact "winners round-tripping" risk that PR #18
-    # flagged, and half of them peaked above the *old* 2% trailing-activation
-    # bar (i.e. would likely have locked in a small win under the pre-PR#18
-    # config). n=6 is still below the ~15-trade noise floor the issue sets,
-    # so this is a partial hedge, not a full revert: the "0" tier alone comes
-    # back down (still above the pre-PR#18 6% baseline) so a fast, hard
-    # reversal within the first 4h gets some profit-lock again, while every
-    # other tier and the 4.5%/2.7% trailing stay untouched to keep testing
-    # whether the wider trail can bank a real trend winner. Re-check via
-    # issue #19 same as before.
+    # #19's first live-trade check). n=6 was still below the ~15-trade noise
+    # floor the issue sets, so this was a partial hedge, not a full revert.
+    #
+    # 2026-09-09: FULL REVERT of the 08-31 "let winners run" change (issue
+    # #19). 10 closed trades since the 08-31 deploy, 1 winner, -$6.14
+    # realized — the wider table wiped out most of the system's all-time
+    # gain (~+$8.8 -> +$2.6). Mechanism confirmed on the live ledger: not a
+    # single `roi` exit in those 10 trades, versus the ~+2% `roi` exits that
+    # banked every August winner. The x3 rescale pushed the 12h tier 2% ->
+    # 6% and the 24h tier 1.5% -> 4.5%, and the market since late August has
+    # been sideways-down (signals ~99% HOLD) — nothing came near +4.5% to
+    # arm the trail, so positions ran up +1-2.4%, then round-tripped to the
+    # ATR stop or a small-loss LLM `forceexit`. Avg loss -0.84R, past the
+    # -0.8R "bad sign" line in issue #19's own table. The 09-05 tier-0 hedge
+    # did nothing (4 trades, 1 win, -$1.49 — trades never approach +10%).
+    # Table + trailing pair below restored byte-for-byte to the pre-PR#18
+    # values that were net positive through August. The ATR stop /
+    # hard_loss_cut were never touched by any of this.
     minimal_roi = {
-        "0": 0.10,
-        "240": 0.09,
-        "720": 0.06,
-        "1440": 0.045,
-        "2880": 0.03,
-        "5760": 0.015,
+        "0": 0.06,
+        "240": 0.03,
+        "720": 0.02,
+        "1440": 0.015,
+        "2880": 0.01,
+        "5760": 0.005,
     }
     # Conservative static floor — see class docstring. Also the fallback
     # used by custom_stoploss() below whenever the per-trade tag is absent
@@ -113,16 +119,13 @@ class ExternalSignalStrategy(IStrategy):
     # gain of the combinations tested. Re-run the grid before changing
     # either number again — don't hand-tune just one.
     #
-    # 2026-08-31: moved to 4.5%/2.7% alongside the x3 minimal_roi rescale
-    # above — a wider take-profit table is inert if the trail still banks
-    # every winner near +2%. The margin (activation - distance) is now 1.8%,
-    # well above the 0.75%-margin point the grid above tied to a ~21%
-    # negative-exit rate, so this is a move in the safe direction on that
-    # axis; the sweep (exit_tuning_matrix.py) held win rate flat at ~32%
-    # across the whole range. Still a coupled hand-tune — re-run the full
-    # grid before touching either number independently.
-    trailing_activation_pct = 0.045
-    trailing_distance_pct = 0.027
+    # 2026-08-31: moved to 4.5%/2.7% alongside the x3 minimal_roi rescale.
+    # 2026-09-09: reverted to 2%/1.5% with that rescale (see the minimal_roi
+    # comment) — at +4.5% activation the trail never armed once in 10 live
+    # trades, so winners round-tripped instead of locking in. Back to the
+    # grid-search pair (0.5% margin) that was net positive through August.
+    trailing_activation_pct = 0.02
+    trailing_distance_pct = 0.015
 
     process_only_new_candles = True
     use_exit_signal = False

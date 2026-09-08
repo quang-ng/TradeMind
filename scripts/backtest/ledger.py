@@ -35,19 +35,24 @@ _NO_EXPECTANCY = ExpectancyView(setup_key="(backtest)", sample_size=0, expectanc
 # that file.
 #
 # 2026-09-05: "0" tier walked back 18% -> 10% per issue #19's first
-# live-trade check (see ExternalSignalStrategy.py's minimal_roi comment for
-# the data). Every other tier and the trailing pair are unchanged.
+# live-trade check.
+#
+# 2026-09-09: FULL REVERT of the 08-31 "let winners run" change, mirroring
+# ExternalSignalStrategy.py (see its minimal_roi comment for the live data
+# — 10 trades / 1 win / -$6.14 since the 08-31 deploy, not one `roi` exit).
+# MINIMAL_ROI and the trailing pair are back byte-for-byte to the pre-PR#18
+# values. The ATR stop / hard_loss_cut were never in scope.
 STATIC_STOPLOSS_PCT = Decimal("-0.08")
 MINIMAL_ROI = {
-    0: Decimal("0.10"),
-    240: Decimal("0.09"),
-    720: Decimal("0.06"),
-    1440: Decimal("0.045"),
-    2880: Decimal("0.03"),
-    5760: Decimal("0.015"),
+    0: Decimal("0.06"),
+    240: Decimal("0.03"),
+    720: Decimal("0.02"),
+    1440: Decimal("0.015"),
+    2880: Decimal("0.01"),
+    5760: Decimal("0.005"),
 }
-TRAILING_ACTIVATION_PCT = Decimal("0.045")
-TRAILING_DISTANCE_PCT = Decimal("0.027")
+TRAILING_ACTIVATION_PCT = Decimal("0.02")
+TRAILING_DISTANCE_PCT = Decimal("0.015")
 
 
 @dataclass
