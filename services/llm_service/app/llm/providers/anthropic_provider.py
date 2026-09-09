@@ -16,8 +16,14 @@ class AnthropicProvider(Provider):
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         response = await self._client.messages.create(
             model=self._model,
-            max_tokens=1024,
+            max_tokens=2048,
             system=system_prompt,
+            # The decision rubric is fully spelled out in the system prompt;
+            # adaptive thinking adds nothing here but is unbounded — on an
+            # ambiguous ranging setup it once spent the whole token budget
+            # thinking and returned truncated JSON (`malformed_json` -> HOLD).
+            # Disabled, the structured response is a steady ~330-400 tokens.
+            thinking={"type": "disabled"},
             output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
             messages=[{"role": "user", "content": user_prompt}],
         )
