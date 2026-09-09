@@ -80,7 +80,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      # The shared VPS is memory-bandwidth contended (PROJECT.md 8.4): a
+      # cold `uvicorn` import of the FastAPI app routinely takes 40-70s here
+      # while every other container boots at once. start_period must cover
+      # that — failed probes inside it don't count, so `docker compose up`
+      # won't mark the container unhealthy and abort the deploy before the
+      # app finishes importing. Keep in sync with the other app services.
+      start_period: 120s
     networks:
       - llm_net
     restart: unless-stopped
@@ -134,7 +140,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 120s  # see llm_service — slow cold boot on the shared VPS
     networks:
       - core_net
       - llm_net
@@ -171,7 +177,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 120s  # see llm_service — slow cold boot on the shared VPS
     networks:
       - core_net
     restart: unless-stopped
@@ -211,7 +217,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 90s  # see llm_service — slow cold boot on the shared VPS
     restart: unless-stopped
     logging:
       options:
@@ -245,7 +251,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 120s  # see llm_service — slow cold boot on the shared VPS
     networks:
       - core_net
       - llm_net
@@ -311,7 +317,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 90s  # see llm_service — slow cold boot on the shared VPS
     restart: unless-stopped
     logging:
       options:
