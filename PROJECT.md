@@ -455,7 +455,7 @@ show the mark timestamp and never fetch Binance directly.
 |---|---|---|
 | `id` | UUID, PK | |
 | `trace_id` | UUID | |
-| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `POSITION_OPENED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED`, `RECONCILIATION_REQUIRED` |
+| `event_type` | enum | `SIGNAL_RECEIVED`, `SIGNAL_VALIDATION_FAILED`, `RISK_APPROVED`, `RISK_REJECTED`, `ORDER_SUBMITTED`, `ORDER_FILLED`, `ORDER_FAILED`, `ORDER_CANCELLED`, `POSITION_OPENED`, `POSITION_CLOSED`, `KILLSWITCH_ENABLED`, `KILLSWITCH_DISABLED`, `CONFIG_CHANGED`, `RECONCILIATION_REQUIRED`, `LLM_TIMEOUT_STREAK`, `LLM_TIMEOUT_RECOVERED` |
 | `payload` | jsonb | Event-specific detail |
 | `created_at` | timestamptz | |
 
@@ -619,15 +619,13 @@ Configured weights are keyed by provider name. Aggregation uses `weight × provi
 | `key_indicators` | Array of short strings, may be empty |
 | `invalidation_condition` | Non-empty string describing what would change the thesis |
 
-### 8.3 Validation pipeline (`validators/structural.py`, `validators/response_validator.py`)
+### 8.3 Validation pipeline (`validators/structural.py`, `validators/llm_contract.py`, `validators/response_validator.py`)
 
 Executed on every model response, in order. The first structural failure short-circuits to `HOLD`:
 
-1. Response is valid JSON.
-2. Response conforms to the JSON Schema above (required fields present, correct types).
-3. `action` is one of the three allowed enum values.
-4. `confidence` is within `[0.0, 1.0]`.
-5. `reasoning` length is within bounds.
+1. Response is valid JSON, and is a JSON object.
+2. Response satisfies the **dqflow contract** `LLM_RESPONSE_CONTRACT` (`validators/llm_contract.py`) — the response dict is validated as a single-row frame against a declarative [dqflow](https://dqflow.readthedocs.io/) `Contract`: `action`/`confidence`/`reasoning`/`invalidation_condition` present, correct dtype, `action` in the allowed enum, `confidence` in `[0.0, 1.0]`, `reasoning`/`invalidation_condition` non-blank. A failed check maps back to the pipeline's existing reason strings (`invalid_action` / `invalid_confidence` / `schema_invalid`). Keeping the response expectations in one contract object lets them be dumped to YAML (`Contract.to_yaml`) and diffed in CI (`dq diff`) instead of drifting across scattered `Field(...)` args. `key_indicators` (a list) is left to the Pydantic layer.
+3. `LLMOutput` (`models/llm.py`) parses the now-contract-clean dict into the typed model the rest of the pipeline consumes — type/coercion backstop, the 500-char `reasoning` cap, and `key_indicators` typing; not the primary gate.
 
 `ResponseValidator` (`validators/response_validator.py`) also supports an optional repair-prompt retry on a structural failure — re-asking the model to correct its own malformed/schema-invalid output before giving up — gated by `LLMServiceSettings.max_repair_attempts`. It defaults to `0`, which reproduces the "no retry" behavior below exactly; raising it is a deliberate operational change, not something an agent should flip as a side effect of unrelated work (Section 14).
 
@@ -825,7 +823,7 @@ The Risk Engine is the system's fail-closed authority. This table governs behavi
 
 | Failure | Behavior |
 |---|---|
-| LLM Service unreachable/times out | `Signal(action=HOLD, reason=llm_failure)` — cycle completes normally, no trade considered |
+| LLM Service unreachable/times out | `Signal(action=HOLD, reason=llm_failure)` — cycle completes normally, no trade considered. The Scheduler also keeps a global count of consecutive no-signal cycles (timeout / transport failure / provider error) in Redis (`llm:analyze:timeout_streak`); when it reaches `LLM_TIMEOUT_ALERT_THRESHOLD` (default 5) it writes one `LLM_TIMEOUT_STREAK` audit event (Telegram-relayed), and the first good cycle after that writes `LLM_TIMEOUT_RECOVERED` and clears the count |
 | Redis unavailable | Scheduler cannot acquire locks or publish signals → **no new cycles run**. Existing open positions are untouched (Freqtrade manages its own stop-loss independently of Redis) |
 | PostgreSQL unavailable | Risk Engine refuses to evaluate any signal (cannot read account state or write an audit row) → **fail closed, no approvals**. This is a deliberate trade-off: no audit row means no trade, ever |
 | Freqtrade balance endpoint unreachable, unauthorized, non-USDT, or malformed | Persist `RiskDecision(approved=false, reason=FREQTRADE_BALANCE_UNAVAILABLE, equity_snapshot_usdt=null)`, invalidate the Redis balance snapshot, and submit no order. Never use a configured or stale cached balance for sizing |
@@ -897,6 +895,7 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 | `killswitch:global` | string (`"1"`/`"0"`) | none — persistent | Cached mirror of `system_state.killswitch_enabled`; Postgres is authoritative, this is read on every Risk Engine evaluation for latency |
 | `cooldown:{symbol}` | string | = `cooldown_minutes` | Set when a position on `{symbol}` closes; presence blocks new entries (Rule 11) |
 | `ratelimit:llm:{provider}` | counter | 1 min sliding window | Client-side rate limiting of LLM calls |
+| `llm:analyze:timeout_streak` | counter | 24h | Scheduler's global count of consecutive `/analyze` cycles that produced no usable signal; drives the `LLM_TIMEOUT_STREAK` operator alert (Section 9.4). Incremented on each failed cycle, deleted by the first good one |
 
 `killswitch:global` is the one key without a TTL by design (Section 14) — a coordination flag that silently expired would fail *open*, which is exactly the failure mode this system must never have. Every write to it is paired with a synchronous write to `system_state` in Postgres in the same request, Postgres write first — if the Postgres write fails, the Redis write is not attempted, keeping Postgres authoritative.
 
@@ -1022,7 +1021,7 @@ The MVP is complete when all of the following hold:
 - [ ] Every `Signal`, `RiskDecision`, `Order`, and `Position` change is reconstructable end-to-end from Postgres via a single `trace_id`.
 - [ ] The global kill switch, once enabled (manually or via the daily-loss circuit breaker), blocks every subsequent entry until explicitly disabled, verified by an integration test.
 - [ ] The operator console displays system status, equity/P&L, signals, risk decisions, orders, positions, raw model detail, and trace audit timelines using only authenticated Admin API calls; its kill-switch and risk-config actions use the same audited API paths as other Administration Zone clients.
-- [ ] Telegram receives a message only for buy/sell trade actions (position opened/closed), kill-switch transitions, and unreconciled-order alerts — not for every signal, risk decision, or intermediate order state change.
+- [ ] Telegram receives a message only for buy/sell trade actions (position opened/closed), kill-switch transitions, unreconciled-order alerts, and the stalled-LLM alert (`LLM_TIMEOUT_STREAK` / `LLM_TIMEOUT_RECOVERED`) — not for every signal, risk decision, or intermediate order state change.
 - [ ] The LLM Analysis Service container has no network route to Binance or Freqtrade and holds no exchange credentials, verified by inspecting the Compose network configuration and container environment.
 - [ ] Killing Redis, Postgres, or the LLM Service mid-cycle results in the documented fail-closed behavior (Section 9.4), not a crash loop or a silent approval.
 - [ ] A 72-hour unattended dry-run run completes with a fully consistent audit trail (no orphaned `SUBMITTED` orders older than the reconciliation window) and no unhandled exceptions in service logs.

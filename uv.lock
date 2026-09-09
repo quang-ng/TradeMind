@@ -575,16 +575,15 @@ wheels = [
 
 [[package]]
 name = "dqflow"
-version = "0.2.1"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
-    { name = "pandas" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/0a/b387f2513e8c2bc8490bfc9a85ac702d232e25709984214af9e49a3357cf/dqflow-0.2.1.tar.gz", hash = "sha256:ea7085bf8b838e146a9c9f8f50cbdbd02f61948798905a578c0bd3ce9b4769f3", size = 83924 }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/3a/9ca570ca7798ca8579a679e785274e264bae474fe2a4c657d2c1f64c1c0d/dqflow-0.5.0.tar.gz", hash = "sha256:02bb8f0a88a2ad98ea3fe091f2578764efcf272f5202d7e4345e420deda177fd", size = 193663 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/31/6242ddbc1e07dc6928ea403fb3b512a82572b2cee123507cf9d111eed357/dqflow-0.2.1-py3-none-any.whl", hash = "sha256:7e051c7eda0ccd6ce7ccdfb7346c16ca0599fe569ec6f5f3dd196c3242e4435a", size = 16961 },
+    { url = "https://files.pythonhosted.org/packages/54/a5/72654ad65bff2a7c3aaa549516cbbb0b23bd325f429a6e8a9dce2382fb5d/dqflow-0.5.0-py3-none-any.whl", hash = "sha256:b18fa092b1d3930660fa29e4ec6580fd35ec9ab67d1f33c678d5da969cdd38e9", size = 60256 },
 ]
 
 [[package]]
@@ -1838,7 +1837,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11,<4" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "ccxt", specifier = ">=4.4" },
-    { name = "dqflow", specifier = ">=0.2.1" },
+    { name = "dqflow", specifier = ">=0.5.0" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pandas", specifier = ">=2.2" },

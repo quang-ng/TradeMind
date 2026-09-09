@@ -30,6 +30,15 @@ sentiment_service = MarketSentimentService(default_sentiment_providers())
 
 _TIMEFRAME_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+# `Signal.reasoning` values that mean the `/analyze` call produced no usable
+# answer at all — the model timed out, the HTTP call to the LLM service
+# failed, or the provider raised. Distinct from a considered `HOLD` or a
+# schema/JSON rejection (both of which still reflect a model that responded).
+# A run of these in a row is what trips the operator alert below.
+_LLM_TIMEOUT_REASONS = frozenset(
+    {"llm_timeout", "llm_service_unreachable", "provider_error"}
+)
+
 
 def timeframe_to_seconds(timeframe: str) -> int:
     """Parses ccxt-style timeframe strings (`"5m"`, `"1h"`, ...). Shared with
@@ -198,6 +207,14 @@ async def _run_locked_cycle(
                 },
             )
         )
+        await _track_llm_analyze_health(
+            session,
+            redis_client,
+            symbol=symbol,
+            trace_id=trace_id,
+            reasoning=llm_result.get("reasoning") or "",
+            threshold=settings.llm_timeout_alert_threshold,
+        )
         await redis_client.xadd(
             redis_keys.SIGNALS_PENDING_STREAM, {"signal_id": str(signal_row.id)}
         )
@@ -205,6 +222,85 @@ async def _run_locked_cycle(
 
     logger.info("cycle_completed", extra={"symbol": symbol, "trace_id": str(trace_id)})
     return trace_id
+
+
+async def _track_llm_analyze_health(
+    session: Any,
+    redis_client: Any,
+    *,
+    symbol: str,
+    trace_id: uuid.UUID,
+    reasoning: str,
+    threshold: int,
+) -> None:
+    """Maintain the global consecutive-`/analyze`-failure counter in Redis
+    and append the operator-alert audit events on the edges:
+
+    * `LLM_TIMEOUT_STREAK` once, the cycle the streak first reaches
+      `threshold` — no repeat pages while it stays broken.
+    * `LLM_TIMEOUT_RECOVERED` on the first good cycle after a streak that
+      had alerted.
+
+    Best-effort telemetry: a Redis error here is logged and swallowed so it
+    never blocks signal persistence (PROJECT.md Section 9.4 — notification
+    is best-effort, decisioning is not). Any audit event is added to the
+    caller's session and committed in the same transaction as the signal."""
+    if threshold <= 0:
+        return
+
+    key = redis_keys.llm_timeout_streak()
+    timed_out = reasoning in _LLM_TIMEOUT_REASONS
+    try:
+        if timed_out:
+            streak = int(await redis_client.incr(key))
+            await redis_client.expire(key, redis_keys.LLM_TIMEOUT_STREAK_TTL_SECONDS)
+            previous = 0
+        else:
+            raw = await redis_client.get(key)
+            previous = int(raw) if raw is not None else 0
+            streak = 0
+            if previous:
+                await redis_client.delete(key)
+    except Exception:
+        logger.warning("llm_timeout_streak_tracking_failed", extra={"symbol": symbol})
+        return
+
+    if timed_out:
+        logger.warning(
+            "llm_analyze_no_signal",
+            extra={
+                "symbol": symbol,
+                "reason": reasoning,
+                "streak": streak,
+                "threshold": threshold,
+                "trace_id": str(trace_id),
+            },
+        )
+        if streak == threshold:
+            session.add(
+                AuditEvent(
+                    trace_id=trace_id,
+                    event_type=AuditEventType.LLM_TIMEOUT_STREAK.value,
+                    payload={
+                        "streak": streak,
+                        "threshold": threshold,
+                        "symbol": symbol,
+                        "reason": reasoning,
+                    },
+                )
+            )
+    elif previous >= threshold:
+        logger.info(
+            "llm_analyze_recovered",
+            extra={"symbol": symbol, "recovered_after": previous, "trace_id": str(trace_id)},
+        )
+        session.add(
+            AuditEvent(
+                trace_id=trace_id,
+                event_type=AuditEventType.LLM_TIMEOUT_RECOVERED.value,
+                payload={"recovered_after": previous, "symbol": symbol},
+            )
+        )
 
 
 async def recompute_performance_snapshot(

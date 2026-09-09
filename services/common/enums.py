@@ -80,3 +80,9 @@ class AuditEventType(str, Enum):
     KILLSWITCH_DISABLED = "KILLSWITCH_DISABLED"
     CONFIG_CHANGED = "CONFIG_CHANGED"
     RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+    # Scheduler: N consecutive `/analyze` cycles produced no usable signal
+    # (timeout / transport failure / provider error). Paged to the operator
+    # once per streak; cleared by `LLM_TIMEOUT_RECOVERED` on the next good
+    # cycle. See `SchedulerSettings.llm_timeout_alert_threshold`.
+    LLM_TIMEOUT_STREAK = "LLM_TIMEOUT_STREAK"
+    LLM_TIMEOUT_RECOVERED = "LLM_TIMEOUT_RECOVERED"

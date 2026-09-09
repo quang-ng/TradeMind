@@ -25,9 +25,10 @@ _NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 _AUDIT_BATCH_SIZE = 50
 
 # Telegram is now limited to buy/sell trade actions plus the safety alerts an
-# operator must act on (kill-switch transitions, unreconciled orders) — every
-# other audit event (signals, risk decisions, order submitted/failed/etc.)
-# stays in the audit log but is no longer relayed.
+# operator must act on (kill-switch transitions, unreconciled orders, a
+# stalled LLM analysis path) — every other audit event (signals, risk
+# decisions, order submitted/failed/etc.) stays in the audit log but is no
+# longer relayed.
 _NOTIFY_EVENT_TYPES = frozenset(
     {
         AuditEventType.POSITION_OPENED.value,
@@ -35,6 +36,8 @@ _NOTIFY_EVENT_TYPES = frozenset(
         AuditEventType.KILLSWITCH_ENABLED.value,
         AuditEventType.KILLSWITCH_DISABLED.value,
         AuditEventType.RECONCILIATION_REQUIRED.value,
+        AuditEventType.LLM_TIMEOUT_STREAK.value,
+        AuditEventType.LLM_TIMEOUT_RECOVERED.value,
     }
 )
 
@@ -59,6 +62,18 @@ def _format_event(event: AuditEvent) -> str:
         text = (
             f"OPERATOR ACTION REQUIRED: stale order {p.get('order_id')} "
             f"for {p.get('symbol')} could not be reconciled ({p.get('reason')})"
+        )
+    elif et == AuditEventType.LLM_TIMEOUT_STREAK.value:
+        text = (
+            f"LLM ANALYSIS STALLED: {p.get('streak')} consecutive /analyze cycles "
+            f"produced no signal (latest: {p.get('reason')} on {p.get('symbol')}). "
+            "No new trades can be opened until it recovers — check the LLM service "
+            "and the Ollama host."
+        )
+    elif et == AuditEventType.LLM_TIMEOUT_RECOVERED.value:
+        text = (
+            f"LLM analysis recovered — a /analyze cycle produced a signal again "
+            f"after {p.get('recovered_after')} consecutive failures."
         )
     else:
         text = f"{et}: {p}"

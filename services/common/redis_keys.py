@@ -5,6 +5,11 @@ the key schema can only drift in one place."""
 CYCLE_LOCK_TTL_SECONDS = 5 * 60
 DECISION_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 ACCOUNT_BALANCE_SNAPSHOT_TTL_SECONDS = 90
+# Refreshed on every failed `/analyze` cycle and cleared by the first good
+# one, so this only outlives a scheduler that has stopped running entirely
+# mid-streak — long enough to survive a redeploy, short enough to not carry
+# a stale partial count into a new day.
+LLM_TIMEOUT_STREAK_TTL_SECONDS = 24 * 60 * 60
 SIGNALS_PENDING_STREAM = "signals:pending"
 SIGNALS_PENDING_CONSUMER_GROUP = "risk_engine"
 KILLSWITCH_GLOBAL_KEY = "killswitch:global"
@@ -33,3 +38,11 @@ def cooldown(symbol: str) -> str:
 
 def llm_ratelimit(provider: str) -> str:
     return f"ratelimit:llm:{provider}"
+
+
+def llm_timeout_streak() -> str:
+    """Global (not per-symbol) count of consecutive `/analyze` cycles that
+    returned no usable signal — a stalled local model fails every symbol,
+    so one counter across all of them detects an outage in a candle period
+    or two instead of `threshold` periods per symbol."""
+    return "llm:analyze:timeout_streak"

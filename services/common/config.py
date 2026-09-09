@@ -204,6 +204,14 @@ class SchedulerSettings(BaseSettings):
     # analyze timeout (the second call effectively pays 2x generation time).
     symbol_stagger_seconds: int = 70
     scheduler_health_port: int = 8000
+    # 2026-09-09: page the operator (via the notifier's Telegram feed) after
+    # this many consecutive `/analyze` cycles that produced no usable signal
+    # — an inference timeout, a transport failure, or a provider error, i.e.
+    # any outcome that falls back to HOLD without the model actually
+    # answering. The count is global across symbols (a stalled local model
+    # fails every cycle) and is reset by the first cycle that does get an
+    # answer. Set to 0 to disable the alert entirely.
+    llm_timeout_alert_threshold: int = 5
 
 
 class FreqtradeSettings(BaseSettings):

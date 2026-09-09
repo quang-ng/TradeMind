@@ -137,6 +137,10 @@ services:
       SYMBOL_STAGGER_SECONDS: ${SYMBOL_STAGGER_SECONDS:-70}
       LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-455}
       LLM_OHLCV_WINDOW: ${LLM_OHLCV_WINDOW:-4}
+      # Telegram-page the operator after N consecutive /analyze cycles that
+      # produced no signal (timeout / transport failure / provider error).
+      # 0 disables. See common/config.py SchedulerSettings.
+      LLM_TIMEOUT_ALERT_THRESHOLD: ${LLM_TIMEOUT_ALERT_THRESHOLD:-5}
       # Comma-separated (common/config.py's SchedulerSettings splits it) —
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
       # services never disagree on which symbols are actually tradable.

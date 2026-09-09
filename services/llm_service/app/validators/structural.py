@@ -3,6 +3,7 @@ import json
 from pydantic import ValidationError
 
 from ..models.llm import LLMOutput
+from .llm_contract import check_llm_response
 
 
 class ValidationFailure(Exception):
@@ -16,8 +17,9 @@ class ValidationFailure(Exception):
 
 def parse_llm_response(raw_text: str) -> LLMOutput:
     """Structural half of the PROJECT.md Section 8.3 validation pipeline:
-    JSON parse, schema conformance, action enum, confidence range,
-    reasoning length — in order, first failure raises `ValidationFailure`
+    JSON parse, then the dqflow value contract (`llm_contract.py`: action
+    enum, confidence range, non-empty/bounded free text), then `LLMOutput`
+    for typing/coercion — in order, first failure raises `ValidationFailure`
     with the failing reason. The semantic exit rubric runs separately, after
     this succeeds (`validators/semantic.py`)."""
     try:
@@ -27,6 +29,10 @@ def parse_llm_response(raw_text: str) -> LLMOutput:
 
     if not isinstance(data, dict):
         raise ValidationFailure("malformed_json")
+
+    contract_failure = check_llm_response(data)
+    if contract_failure is not None:
+        raise ValidationFailure(contract_failure)
 
     try:
         return LLMOutput.model_validate(data)

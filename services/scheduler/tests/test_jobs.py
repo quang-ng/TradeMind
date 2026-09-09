@@ -33,6 +33,7 @@ class FakeRedis:
         self.deny_keys = deny_keys or set()
         self.xadd_calls: list[tuple[str, dict]] = []
         self.deleted: list[str] = []
+        self.expirations: dict[str, int] = {}
 
     async def set(self, key, value, nx=False, ex=None):
         if key in self.deny_keys:
@@ -44,6 +45,14 @@ class FakeRedis:
 
     async def get(self, key):
         return self.store.get(key)
+
+    async def incr(self, key):
+        self.store[key] = str(int(self.store.get(key, "0")) + 1)
+        return int(self.store[key])
+
+    async def expire(self, key, ttl):
+        self.expirations[key] = ttl
+        return True
 
     async def delete(self, key):
         self.store.pop(key, None)
@@ -281,6 +290,173 @@ async def test_run_cycle_falls_back_to_hold_when_llm_service_unreachable(monkeyp
     assert trace_id is not None
     signal_row = captured_session.added[0]
     assert signal_row.action == "HOLD"
+
+
+# --- LLM consecutive-timeout operator alert ----------------------------------
+
+
+TIMEOUT_PAYLOAD = {
+    "action": "HOLD",
+    "confidence": 0.0,
+    "reasoning": "llm_timeout",
+    "model_name": "n/a",
+    "raw_response": None,
+}
+
+
+def _fake_fetch_fresh_candle_each_call(base: list[dict]):
+    """Like `_fake_fetch_closed_candles` but shifts every candle one hour
+    later on each call, so repeated `run_cycle` invocations don't collide on
+    the per-candle idempotency key."""
+    state = {"n": 0}
+
+    async def _fetch(symbol, timeframe="1h", limit=200):
+        state["n"] += 1
+        return [{**c, "t": c["t"] + state["n"] * HOUR_MS} for c in base]
+
+    return _fetch
+
+
+def _streak_events(session: "FakeSession", event_type: str) -> list:
+    return [e for e in session.added if getattr(e, "event_type", None) == event_type]
+
+
+async def test_run_cycle_pages_operator_after_five_consecutive_llm_timeouts(monkeypatch, settings):
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    sessions: list[FakeSession] = []
+
+    def session_factory() -> FakeSession:
+        sessions.append(FakeSession())
+        return sessions[-1]
+
+    for _ in range(5):
+        await jobs.run_cycle(
+            "BTC/USDT",
+            redis_client=redis_client,
+            session_factory=session_factory,
+            http_client=_http_client_returning(TIMEOUT_PAYLOAD),
+            settings=settings,
+        )
+
+    # Only the fifth cycle — the one that reaches the threshold — writes the alert.
+    assert all(_streak_events(s, "LLM_TIMEOUT_STREAK") == [] for s in sessions[:4])
+    (alert,) = _streak_events(sessions[4], "LLM_TIMEOUT_STREAK")
+    assert alert.payload == {
+        "streak": 5,
+        "threshold": 5,
+        "symbol": "BTC/USDT",
+        "reason": "llm_timeout",
+    }
+    assert redis_client.expirations[jobs.redis_keys.llm_timeout_streak()] == (
+        jobs.redis_keys.LLM_TIMEOUT_STREAK_TTL_SECONDS
+    )
+
+
+async def test_run_cycle_does_not_repage_while_llm_keeps_timing_out(monkeypatch, settings):
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    sessions: list[FakeSession] = []
+
+    def session_factory() -> FakeSession:
+        sessions.append(FakeSession())
+        return sessions[-1]
+
+    for _ in range(7):
+        await jobs.run_cycle(
+            "BTC/USDT",
+            redis_client=redis_client,
+            session_factory=session_factory,
+            http_client=_http_client_returning(TIMEOUT_PAYLOAD),
+            settings=settings,
+        )
+
+    alerts = [e for s in sessions for e in _streak_events(s, "LLM_TIMEOUT_STREAK")]
+    assert len(alerts) == 1  # fired once at the 5th cycle, not again at the 6th/7th
+
+
+async def test_run_cycle_emits_recovery_event_and_clears_streak_after_good_cycle(
+    monkeypatch, settings
+):
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    sessions: list[FakeSession] = []
+
+    def session_factory() -> FakeSession:
+        sessions.append(FakeSession())
+        return sessions[-1]
+
+    for _ in range(5):
+        await jobs.run_cycle(
+            "BTC/USDT",
+            redis_client=redis_client,
+            session_factory=session_factory,
+            http_client=_http_client_returning(TIMEOUT_PAYLOAD),
+            settings=settings,
+        )
+    await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=session_factory,
+        http_client=_http_client_returning(LLM_PAYLOAD),  # a real signal
+        settings=settings,
+    )
+
+    (recovery,) = _streak_events(sessions[-1], "LLM_TIMEOUT_RECOVERED")
+    assert recovery.payload == {"recovered_after": 5, "symbol": "BTC/USDT"}
+    assert jobs.redis_keys.llm_timeout_streak() not in redis_client.store
+
+
+async def test_run_cycle_good_cycle_without_prior_streak_emits_nothing(monkeypatch, settings):
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    session = FakeSession()
+
+    await jobs.run_cycle(
+        "BTC/USDT",
+        redis_client=redis_client,
+        session_factory=lambda: session,
+        http_client=_http_client_returning(LLM_PAYLOAD),
+        settings=settings,
+    )
+
+    assert _streak_events(session, "LLM_TIMEOUT_RECOVERED") == []
+    assert _streak_events(session, "LLM_TIMEOUT_STREAK") == []
+    # Signal + SIGNAL_RECEIVED only — the health tracker added nothing.
+    assert [type(o).__name__ for o in session.added] == ["Signal", "AuditEvent"]
+
+
+async def test_run_cycle_llm_timeout_alert_disabled_when_threshold_zero(monkeypatch):
+    settings = SchedulerSettings(candle_lookback=25, llm_timeout_alert_threshold=0)
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    sessions: list[FakeSession] = []
+
+    def session_factory() -> FakeSession:
+        sessions.append(FakeSession())
+        return sessions[-1]
+
+    for _ in range(6):
+        await jobs.run_cycle(
+            "BTC/USDT",
+            redis_client=redis_client,
+            session_factory=session_factory,
+            http_client=_http_client_returning(TIMEOUT_PAYLOAD),
+            settings=settings,
+        )
+
+    assert all(_streak_events(s, "LLM_TIMEOUT_STREAK") == [] for s in sessions)
+    assert jobs.redis_keys.llm_timeout_streak() not in redis_client.store
 
 
 async def test_run_cycle_computes_unrealized_pnl_pct_for_open_position(monkeypatch, settings):

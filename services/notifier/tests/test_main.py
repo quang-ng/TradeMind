@@ -3,12 +3,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from common.config import NotifierSettings
-from common.db.models import Order, Position, RiskDecision, Signal
-from common.enums import Action, OrderStatus, PositionStatus, SignalStatus
+from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
+from common.enums import Action, AuditEventType, OrderStatus, PositionStatus, SignalStatus
 
 from notifier.app.main import (
+    _NOTIFY_EVENT_TYPES,
     _describe_window,
     _fetch_status,
+    _format_event,
     _format_rollup_line,
     _format_trade_line,
     _next_weekly_run,
@@ -81,6 +83,36 @@ def test_format_trade_line():
     assert (
         _format_trade_line(position) == "  SOL/USDT: 73.68 -> 72.95, -0.2200 USDT (-0.99%)"
     )
+
+
+def test_llm_timeout_streak_is_relayed_to_telegram():
+    assert AuditEventType.LLM_TIMEOUT_STREAK.value in _NOTIFY_EVENT_TYPES
+    assert AuditEventType.LLM_TIMEOUT_RECOVERED.value in _NOTIFY_EVENT_TYPES
+
+
+def test_format_event_llm_timeout_streak():
+    trace_id = uuid.uuid4()
+    event = AuditEvent(
+        trace_id=trace_id,
+        event_type=AuditEventType.LLM_TIMEOUT_STREAK.value,
+        payload={"streak": 5, "threshold": 5, "symbol": "ETH/USDT", "reason": "llm_timeout"},
+    )
+    text = _format_event(event)
+    assert "LLM ANALYSIS STALLED" in text
+    assert "5 consecutive" in text
+    assert "llm_timeout on ETH/USDT" in text
+    assert f"trace_id={trace_id}" in text
+
+
+def test_format_event_llm_timeout_recovered():
+    event = AuditEvent(
+        trace_id=uuid.uuid4(),
+        event_type=AuditEventType.LLM_TIMEOUT_RECOVERED.value,
+        payload={"recovered_after": 7, "symbol": "BTC/USDT"},
+    )
+    text = _format_event(event)
+    assert "recovered" in text
+    assert "after 7 consecutive failures" in text
 
 
 def test_next_weekly_run_advances_to_next_matching_weekday():
