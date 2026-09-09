@@ -9,14 +9,13 @@ the public network.
 - Docker Engine with the Compose plugin
 - 4 CPU, 8 GB RAM, and persistent SSD storage recommended for the core stack
   (Postgres, Redis, Freqtrade, admin services, operator console)
-- if `LLM_PROVIDER=ollama` (self-hosted local model instead of a hosted API),
-  add on top of the core stack: 4+ CPU cores and enough RAM to hold the model
-  in memory — roughly 4-6 GB for a 3B-parameter model, 8+ GB for a 7-8B
-  model, at Q4 quantization — plus a few GB of persistent disk per pulled
-  model. An NVIDIA GPU with `nvidia-container-toolkit` is optional but
-  strongly recommended. The default CPU-only schedule staggers four symbols
-  across each five-minute candle while retaining a fail-closed 180s
-  `/analyze` budget (PROJECT.md Sections 5.1 and 8.3).
+- the default `LLM_PROVIDER=anthropic` needs only a workspace-scoped
+  `LLM_API_KEY` and no extra hardware. `LLM_PROVIDER=ollama` (self-hosted
+  local model) is retained in code but **not** in `docker-compose.yml` — CPU
+  inference on a shared VPS could not keep the `/analyze` budget (PROJECT.md
+  Section 8.4). To run it, re-add an `ollama` service on `llm_net`, budget
+  8+ GB RAM for a 7-8B Q4 model plus an NVIDIA GPU (`nvidia-container-toolkit`)
+  unless calls are very infrequent, and point `OLLAMA_BASE_URL` at it.
 - a VPN, SSH tunnel, or TLS reverse proxy for the Admin API
 - off-host encrypted backup storage
 
@@ -94,8 +93,8 @@ sudo ss -lntp | grep ':3000'
 ```
 
 The frontend should show `0.0.0.0:3000->80/tcp`. The Admin API must remain
-bound to `127.0.0.1:8000`; PostgreSQL, Redis, Freqtrade, the LLM service, and
-Ollama must have no public host binding. This mode uses plain HTTP, so the
+bound to `127.0.0.1:8000`; PostgreSQL, Redis, Freqtrade, and the LLM service
+must have no public host binding. This mode uses plain HTTP, so the
 bearer API key is not protected from network interception. Use a long random
 `ADMIN_API_KEY`, keep `DRY_RUN=true`, and move to encrypted access before any
 non-evaluation use.

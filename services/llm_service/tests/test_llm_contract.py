@@ -8,7 +8,7 @@ from llm_service.app.validators.llm_contract import (
     check_llm_response,
     contract_failure_reason,
 )
-from llm_service.app.validators.structural import ValidationFailure, parse_llm_response
+from llm_service.app.validators.structural import parse_llm_response
 
 VALID = {
     "action": "SELL",
@@ -50,13 +50,12 @@ def test_confidence_as_integer_is_accepted():
     assert check_llm_response({**VALID, "confidence": 0}) is None
 
 
-def test_over_long_reasoning_is_caught_by_the_pydantic_layer():
-    # The dqflow contract does not cap length; parse_llm_response still must
-    # reject it (LLMOutput's max_length=500) as schema_invalid.
-    assert check_llm_response({**VALID, "reasoning": "x" * 501}) is None
-    with pytest.raises(ValidationFailure) as exc:
-        parse_llm_response(json.dumps({**VALID, "reasoning": "x" * 501}))
-    assert exc.value.reason == "schema_invalid"
+def test_over_long_reasoning_is_truncated_not_rejected():
+    # The dqflow contract does not cap length; parse_llm_response trims an
+    # overrun to 500 chars (Section 7.1) rather than discarding the signal.
+    assert check_llm_response({**VALID, "reasoning": "x" * 800}) is None
+    output = parse_llm_response(json.dumps({**VALID, "reasoning": "x" * 800}))
+    assert output.reasoning == "x" * 500
 
 
 @pytest.mark.parametrize(

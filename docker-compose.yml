@@ -52,48 +52,15 @@ services:
       - core_net
     restart: "no"
 
-  # Self-hosted local LLM runtime for llm_service's "ollama" provider
-  # (services/llm_service/app/providers/ollama_provider.py). Scoped to
-  # llm_net only — same Isolated Zone boundary as llm_service itself
-  # (PROJECT.md Section 3): no route to freqtrade, risk_engine, or core_net.
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-    networks:
-      - llm_net
-    restart: unless-stopped
-    logging:
-      options:
-        max-size: "10m"
-        max-file: "5"
-
-  # One-shot: pulls OLLAMA_MODEL so it is present before llm_service ever
-  # calls it — keeps "docker compose up" free of manual steps (PROJECT.md
-  # Section 13) the same way `migrate` does for the schema. Re-running is
-  # a cheap no-op once the model is cached.
-  ollama-pull:
-    image: ollama/ollama:latest
-    environment:
-      OLLAMA_HOST: ollama:11434
-    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:7b}"]
-    depends_on:
-      ollama:
-        condition: service_healthy
-    networks:
-      - llm_net
-    restart: "no"
-
   # Isolated Zone (PROJECT.md Section 3): no exchange credentials, no route
   # to freqtrade or risk_engine — enforced here by network segmentation,
-  # not just convention. Only ever calls out to the LLM provider's API
-  # (the anthropic provider) or the ollama service (the ollama provider).
+  # not just convention. Only ever calls out to the configured LLM
+  # provider's API (currently the anthropic provider). The "ollama" provider
+  # (services/llm_service/app/llm/providers/ollama_provider.py) is retained
+  # in code but its self-hosted runtime is no longer deployed here — CPU
+  # inference on the shared VPS could not keep up (see PROJECT.md 8.4). To
+  # bring it back, re-add an `ollama` service on `llm_net` and point
+  # OLLAMA_BASE_URL at it.
   llm_service:
     build:
       context: .
@@ -102,14 +69,12 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       LLM_API_KEY: ${LLM_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      # OLLAMA_BASE_URL / OLLAMA_MODEL default from common/config.py's
+      # LLMServiceSettings — only set them here if a local ollama runtime is
+      # re-added (see the comment above this service).
       ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-450}
     ports:
       - "127.0.0.1:8001:8000"
-    depends_on:
-      ollama-pull:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -145,18 +110,18 @@ services:
       # must mirror freqtrade's PAIR_WHITELIST_JSON below so the two
       # services never disagree on which symbols are actually tradable.
       SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,XRP/USDT}
-      # Must mirror llm_service's own LLM_PROVIDER/ANTHROPIC_MODEL/OLLAMA_MODEL/
-      # OLLAMA_TEMPERATURE defaults below (PROJECT.md Section 8.4) — the
-      # Scheduler computes the *effective* LLM config (these env defaults
-      # layered with any persisted `PATCH /config/llm` override) and forwards
-      # it per-request, since llm_service itself has no DB access to read
-      # overrides directly (Section 3: Isolated Zone stays off core_net).
-      # A mismatch here would silently diverge from what llm_service is
-      # actually configured with whenever no DB override exists yet.
+      # Must mirror llm_service's own LLM_PROVIDER / ANTHROPIC_MODEL defaults
+      # (PROJECT.md Section 8.4) — the Scheduler computes the *effective* LLM
+      # config (these env defaults layered with any persisted
+      # `PATCH /config/llm` override) and forwards it per-request, since
+      # llm_service itself has no DB access to read overrides directly
+      # (Section 3: Isolated Zone stays off core_net). A mismatch here would
+      # silently diverge from what llm_service is actually configured with
+      # whenever no DB override exists yet. The OLLAMA_* knobs default from
+      # common/config.py and only need setting here if a local ollama
+      # runtime is re-added (see the llm_service comment).
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      OLLAMA_TEMPERATURE: ${OLLAMA_TEMPERATURE:-0.4}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -361,5 +326,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
-  ollama_data:
   freqtrade_data:

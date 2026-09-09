@@ -339,8 +339,8 @@ trademind/
 | `POSTGRES_DSN` | all services | Shared audit database connection |
 | `REDIS_URL` | all services | Coordination store connection |
 | `LLM_PROVIDER` | llm_service | Selects the single configured provider adapter: `anthropic` (hosted) or `ollama` (self-hosted) |
-| `LLM_API_KEY` | llm_service only | Anthropic provider only. Never injected into any other container |
-| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | llm_service only | Ollama provider only. Base URL of the self-hosted Ollama server (the `ollama` Compose service, isolated-zone-only per Section 3) and the model tag to request |
+| `LLM_API_KEY` | llm_service only | Anthropic provider only — a **workspace-scoped** key. Never injected into any other container |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | llm_service only | Ollama provider only. Default from `common/config.py`; no ollama runtime ships in `docker-compose.yml` (Section 8.4) — set these only if one is re-added on `llm_net` |
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | freqtrade, risk_engine only | Never injected into llm_service, admin_api, or notifier |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine only | Authenticated balance reads and approved force-entry/exit calls; never injected into admin_api |
 | `BALANCE_REFRESH_INTERVAL_SECONDS` | risk_engine | Refresh cadence for the short-lived Admin balance snapshot (default 30s; risk evaluation always performs its own fresh call) |
@@ -652,8 +652,8 @@ Every fallback-to-`HOLD` still produces a `Signal` row with `reasoning` overwrit
 
 One interface (`llm/providers/base.py`), selected by the single `LLM_PROVIDER` value configured for the deployment — never more than one active provider at a time (Section 2.2 rules out ensembling/model voting). Two concrete implementations exist:
 
-- `anthropic` (`llm/providers/anthropic_provider.py`) — hosted API, requires `LLM_API_KEY`.
-- `ollama` (`llm/providers/ollama_provider.py`) — self-hosted, talks to the `ollama` Compose service (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, requires no external API key or account.
+- `anthropic` (`llm/providers/anthropic_provider.py`) — hosted API, requires a workspace-scoped `LLM_API_KEY`. **The active deployment.**
+- `ollama` (`llm/providers/ollama_provider.py`) — self-hosted, talks to an Ollama server (isolated-zone-only, Section 3) over `OLLAMA_BASE_URL`, no external API key. **Retained in code, not deployed:** the `ollama` / `ollama-pull` Compose services were removed after CPU inference on the shared VPS repeatedly collapsed under host contention (100% `/analyze` timeouts for 30h+); to use it again, re-add an `ollama` service on `llm_net` and point `OLLAMA_BASE_URL` at it.
 
 `llm/client.py`'s `LLMClient` wraps whichever `Provider` is selected with the retry/timeout policy described in Section 8.3's failure-mode table — the provider implementations themselves carry no retry/timeout logic of their own.
 

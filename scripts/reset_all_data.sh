@@ -11,7 +11,7 @@
 # cycle locks, cooldowns, kill switch, signals:pending stream).
 #
 # Preserves: `risk_config_state`/`llm_config_state`/`notifier_state`
-# overrides and the Ollama model cache (ollama_data) — neither is touched.
+# overrides — not touched.
 #
 # Intended as a one-time manual reset, not a routine operation. Run on the
 # VPS, from the repo root:
