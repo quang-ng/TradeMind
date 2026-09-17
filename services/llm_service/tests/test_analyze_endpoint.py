@@ -146,19 +146,29 @@ def test_analyze_falls_back_to_hold_on_malformed_llm_output(malformed_response, 
     assert body["reasoning"] == expected_reason
 
 
-def test_analyze_falls_back_to_hold_when_provider_errors_on_every_attempt():
+def test_analyze_falls_back_to_hold_when_provider_errors_on_every_attempt(caplog):
     app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
         raise_exc=ConnectionError("provider unreachable")
     )
 
     request_payload = _load_fixture("analyze_request_btcusdt.json")
-    with TestClient(app) as client:
-        response = client.post("/analyze", json=request_payload)
+    with caplog.at_level("WARNING", logger="llm_service.app.llm.client"):
+        with TestClient(app) as client:
+            response = client.post("/analyze", json=request_payload)
 
     assert response.status_code == 200
     body = response.json()
     assert body["action"] == "HOLD"
     assert body["reasoning"] == "provider_error"
+
+    # The underlying exception must be logged, not silently discarded — a
+    # blind `provider_error` gave zero signal on what actually failed
+    # (2026-09-17: an Anthropic account out of credit looked identical to a
+    # transport blip until reproduced by hand on the VPS).
+    provider_error_records = [r for r in caplog.records if r.message == "llm_provider_error"]
+    assert provider_error_records
+    assert provider_error_records[-1].error_type == "ConnectionError"
+    assert provider_error_records[-1].error == "provider unreachable"
 
 
 def test_analyze_falls_back_to_hold_on_timeout():

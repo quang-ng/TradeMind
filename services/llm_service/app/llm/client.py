@@ -1,8 +1,11 @@
 import asyncio
+import logging
 import time
 
 from ..models.llm import LLMRequest, LLMResponse
 from .providers.base import Provider
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -53,9 +56,13 @@ class LLMClient:
                         request.system_prompt, request.user_prompt
                     )
                     return LLMResponse(raw_text=text, failure_reason=None)
-                except Exception:
+                except Exception as exc:
                     remaining = self._timeout_seconds - (time.monotonic() - start)
                     if remaining < self._timeout_seconds / 2:
+                        logger.warning(
+                            "llm_provider_error",
+                            extra={"error_type": type(exc).__name__, "error": str(exc)},
+                        )
                         return LLMResponse(raw_text=None, failure_reason="provider_error")
                     await asyncio.sleep(1.0)
                     try:
@@ -63,7 +70,14 @@ class LLMClient:
                             request.system_prompt, request.user_prompt
                         )
                         return LLMResponse(raw_text=text, failure_reason=None)
-                    except Exception:
+                    except Exception as retry_exc:
+                        logger.warning(
+                            "llm_provider_error",
+                            extra={
+                                "error_type": type(retry_exc).__name__,
+                                "error": str(retry_exc),
+                            },
+                        )
                         return LLMResponse(raw_text=None, failure_reason="provider_error")
         except TimeoutError:
             return LLMResponse(raw_text=None, failure_reason="llm_timeout")
