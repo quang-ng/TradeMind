@@ -1,5 +1,7 @@
 import logging
 
+from common.enums import PREFILTER_MODEL_NAME
+
 from ..context.builder import ContextBuilder
 from ..llm.client import LLMClient
 from ..models.wire import AnalyzeRequest, TradingSignal
@@ -8,6 +10,7 @@ from ..scoring.trade_score import TradeScorer
 from ..signals.generator import SignalGenerator
 from ..strategies.selector import StrategySelector
 from ..strategies.volatility_classifier import VolatilityClassifier
+from ..validators.prefilter import LLMCallPrefilter
 from ..validators.response_validator import ResponseValidator
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,11 @@ class AnalysisPipeline:
     `context` alone (positive-expectancy plan D3/M2) — so every returned
     `TradingSignal`, including the HOLD/failure early-return paths below,
     carries the same journal metadata a successful BUY/SELL would.
+
+    `prefilter` (optional, `LLMServiceSettings.llm_prefilter_enabled`)
+    short-circuits to a deterministic HOLD before the LLM call when the
+    Response Validator's rubric would force HOLD on any model answer —
+    cost control only, never a different decision (`validators/prefilter.py`).
     """
 
     def __init__(
@@ -43,6 +51,7 @@ class AnalysisPipeline:
         llm_client: LLMClient,
         response_validator: ResponseValidator,
         signal_generator: SignalGenerator,
+        prefilter: LLMCallPrefilter | None = None,
     ):
         self._context_builder = context_builder
         self._strategy_selector = strategy_selector
@@ -52,6 +61,7 @@ class AnalysisPipeline:
         self._llm_client = llm_client
         self._response_validator = response_validator
         self._signal_generator = signal_generator
+        self._prefilter = prefilter
 
     async def run(self, request: AnalyzeRequest) -> TradingSignal:
         model_name = self._llm_client.model_name
@@ -59,6 +69,20 @@ class AnalysisPipeline:
         strategy = self._strategy_selector.select(context)
         volatility_regime = self._volatility_classifier.classify(context)
         score = self._trade_scorer.score(context, strategy, volatility_regime)
+
+        if self._prefilter is not None and self._prefilter.should_skip_llm(context):
+            logger.info(
+                "llm_call_skipped",
+                extra={"symbol": context.symbol, "setup_regime": strategy.strategy.value},
+            )
+            return self._signal_generator.build_hold(
+                context,
+                reason=self._prefilter.hold_reason(context),
+                model_name=PREFILTER_MODEL_NAME,
+                strategy=strategy,
+                volatility_regime=volatility_regime,
+                score=score,
+            )
 
         llm_request = self._prompt_builder.build(context, strategy)
         llm_response = await self._llm_client.generate(llm_request)

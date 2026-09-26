@@ -82,6 +82,13 @@ class LLMServiceSettings(BaseSettings):
     # might realistically capture. Deliberately not derived from
     # `risk_engine`'s real sizing/exit constants (Section 3/14 rule 1).
     assumed_reward_multiple: float = 2.0
+    # Skip the paid LLM call when validators/semantic.py's deterministic
+    # rubric would force HOLD on any model answer (llm_service/app/
+    # validators/prefilter.py). Added 2026-09-26 after the Anthropic switch:
+    # ~81% of live calls could not have produced a trade (~$25 -> ~$5/month).
+    # Decision-neutral by construction; set false to restore calling the LLM
+    # on every cycle.
+    llm_prefilter_enabled: bool = True
 
 
 class RedisSettings(BaseSettings):

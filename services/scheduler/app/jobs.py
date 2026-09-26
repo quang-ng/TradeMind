@@ -12,7 +12,13 @@ from common.account_balance import AccountBalanceSnapshot
 from common.config import RedisSettings, SchedulerSettings
 from common.db.models import AuditEvent, PerformanceSnapshot, Position, Signal
 from common.db.session import get_session_factory
-from common.enums import Action, AuditEventType, PositionStatus, SignalStatus
+from common.enums import (
+    PREFILTER_MODEL_NAME,
+    Action,
+    AuditEventType,
+    PositionStatus,
+    SignalStatus,
+)
 from common.llm_config_store import EffectiveLLMConfig, load_effective_llm_config
 from common.performance import summarize
 from common.performance_query import load_closed_trade_metrics
@@ -213,6 +219,7 @@ async def _run_locked_cycle(
             symbol=symbol,
             trace_id=trace_id,
             reasoning=llm_result.get("reasoning") or "",
+            model_name=llm_result.get("model_name") or "",
             threshold=settings.llm_timeout_alert_threshold,
         )
         await redis_client.xadd(
@@ -231,6 +238,7 @@ async def _track_llm_analyze_health(
     symbol: str,
     trace_id: uuid.UUID,
     reasoning: str,
+    model_name: str,
     threshold: int,
 ) -> None:
     """Maintain the global consecutive-`/analyze`-failure counter in Redis
@@ -244,8 +252,13 @@ async def _track_llm_analyze_health(
     Best-effort telemetry: a Redis error here is logged and swallowed so it
     never blocks signal persistence (PROJECT.md Section 9.4 — notification
     is best-effort, decisioning is not). Any audit event is added to the
-    caller's session and committed in the same transaction as the signal."""
-    if threshold <= 0:
+    caller's session and committed in the same transaction as the signal.
+
+    A HOLD from `llm_service`'s deterministic pre-filter never reached the
+    LLM, so it is neutral here: it neither extends nor resets the streak.
+    Counting it as a good cycle would let the ~80% of pre-filtered cycles
+    keep resetting the counter and silence the alert during a real outage."""
+    if threshold <= 0 or model_name == PREFILTER_MODEL_NAME:
         return
 
     key = redis_keys.llm_timeout_streak()

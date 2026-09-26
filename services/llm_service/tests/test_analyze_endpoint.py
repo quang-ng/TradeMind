@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from common.config import LLMServiceSettings
+from common.enums import PREFILTER_MODEL_NAME
 from fastapi.testclient import TestClient
 
 from llm_service.app import main as main_module
@@ -53,8 +54,22 @@ def _load_fixture(name: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def _clear_dependency_overrides():
+    # These tests exercise the LLM-call path (provider errors, timeouts,
+    # malformed output). Their fixtures are setups the deterministic
+    # pre-filter would short-circuit to HOLD before the provider is ever
+    # reached, so it's off by default here; the pre-filter's own endpoint
+    # tests below opt back in via `_prefilter_on`.
+    app.dependency_overrides[get_settings] = lambda: LLMServiceSettings(
+        llm_prefilter_enabled=False
+    )
     yield
     app.dependency_overrides.clear()
+
+
+def _prefilter_on() -> None:
+    app.dependency_overrides[get_settings] = lambda: LLMServiceSettings(
+        llm_prefilter_enabled=True
+    )
 
 
 @pytest.mark.parametrize(
@@ -174,7 +189,7 @@ def test_analyze_falls_back_to_hold_when_provider_errors_on_every_attempt(caplog
 def test_analyze_falls_back_to_hold_on_timeout():
     app.dependency_overrides[get_provider_dependency] = lambda: SlowProvider()
     app.dependency_overrides[get_settings] = lambda: LLMServiceSettings(
-        analyze_timeout_seconds=0.05
+        analyze_timeout_seconds=0.05, llm_prefilter_enabled=False
     )
 
     request_payload = _load_fixture("analyze_request_btcusdt.json")
@@ -303,3 +318,57 @@ def test_analyze_routes_through_provider_override_bypassing_the_injected_default
     assert captured_settings[0].ollama_model == "qwen2.5:7b"
     assert captured_settings[0].ollama_temperature == 0.9
     assert "provider_override" not in captured_prompts[0][1]
+
+
+# --- Deterministic pre-filter (validators/prefilter.py) ----------------------
+
+
+def test_prefilter_returns_hold_without_calling_the_provider():
+    """The BTC fixture is a trend_following setup with no open position, so
+    semantic.py would suppress any BUY: the paid LLM call is skipped."""
+    _prefilter_on()
+    captured_prompts: list[tuple[str, str]] = []
+    app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
+        response_text="unused", captured_prompts=captured_prompts
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/analyze", json=_load_fixture("analyze_request_btcusdt.json"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert captured_prompts == []
+    assert body["action"] == "HOLD"
+    assert body["model_name"] == PREFILTER_MODEL_NAME
+    assert body["reasoning"].startswith("Pre-filter HOLD without an LLM call")
+    assert body["setup_regime"] == "trend_following"
+    assert body["trade_score"] is not None
+
+
+def test_prefilter_still_calls_the_provider_for_a_qualifying_setup():
+    _prefilter_on()
+    captured_prompts: list[tuple[str, str]] = []
+    app.dependency_overrides[get_provider_dependency] = lambda: StubProvider(
+        response_text=json.dumps(
+            {
+                "action": "BUY",
+                "confidence": 0.78,
+                "reasoning": "Fresh entry.",
+                "key_indicators": [],
+                "invalidation_condition": "n/a",
+            }
+        ),
+        captured_prompts=captured_prompts,
+    )
+    request_payload = _load_fixture("analyze_request_btcusdt.json")
+    # Same narrowing as the provider-override test: under the 1.5% trend
+    # threshold, so the setup is no longer trend_following.
+    request_payload["indicators"]["ema_50"] = 60050.0
+
+    with TestClient(app) as client:
+        response = client.post("/analyze", json=request_payload)
+
+    assert response.status_code == 200
+    assert len(captured_prompts) == 1
+    assert response.json()["action"] == "BUY"
+    assert response.json()["model_name"] == "stub:stub-model"

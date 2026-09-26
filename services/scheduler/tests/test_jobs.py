@@ -6,6 +6,7 @@ from decimal import Decimal
 import httpx
 import pytest
 from common.config import SchedulerSettings
+from common.enums import PREFILTER_MODEL_NAME
 
 from scheduler.app import jobs
 
@@ -432,6 +433,46 @@ async def test_run_cycle_good_cycle_without_prior_streak_emits_nothing(monkeypat
     assert _streak_events(session, "LLM_TIMEOUT_STREAK") == []
     # Signal + SIGNAL_RECEIVED only — the health tracker added nothing.
     assert [type(o).__name__ for o in session.added] == ["Signal", "AuditEvent"]
+
+
+PREFILTER_PAYLOAD = {
+    "action": "HOLD",
+    "confidence": 0.0,
+    "reasoning": "Pre-filter HOLD without an LLM call: no open position.",
+    "model_name": PREFILTER_MODEL_NAME,
+    "raw_response": None,
+}
+
+
+async def test_run_cycle_prefilter_hold_neither_extends_nor_resets_the_streak(
+    monkeypatch, settings
+):
+    """Pre-filtered cycles never reach the LLM, so they say nothing about its
+    health: a real outage interleaved with them must still page at the fifth
+    real failure, and they must not emit a false recovery."""
+    monkeypatch.setattr(
+        jobs, "fetch_closed_candles", _fake_fetch_fresh_candle_each_call(_candles(25))
+    )
+    redis_client = FakeRedis()
+    sessions: list[FakeSession] = []
+
+    def session_factory() -> FakeSession:
+        sessions.append(FakeSession())
+        return sessions[-1]
+
+    for payload in [TIMEOUT_PAYLOAD, PREFILTER_PAYLOAD] * 4 + [TIMEOUT_PAYLOAD]:
+        await jobs.run_cycle(
+            "BTC/USDT",
+            redis_client=redis_client,
+            session_factory=session_factory,
+            http_client=_http_client_returning(payload),
+            settings=settings,
+        )
+
+    alerts = [e for s in sessions for e in _streak_events(s, "LLM_TIMEOUT_STREAK")]
+    assert [a.payload["streak"] for a in alerts] == [5]
+    assert all(_streak_events(s, "LLM_TIMEOUT_RECOVERED") == [] for s in sessions)
+    assert int(redis_client.store[jobs.redis_keys.llm_timeout_streak()]) == 5
 
 
 async def test_run_cycle_llm_timeout_alert_disabled_when_threshold_zero(monkeypatch):

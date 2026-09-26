@@ -15,6 +15,7 @@ from .services.pipeline import AnalysisPipeline
 from .signals.generator import SignalGenerator
 from .strategies.selector import StrategySelector
 from .strategies.volatility_classifier import VolatilityClassifier
+from .validators.prefilter import LLMCallPrefilter
 from .validators.response_validator import ResponseValidator
 
 configure_json_logging()
@@ -64,6 +65,15 @@ def _build_pipeline(provider: Provider, settings: LLMServiceSettings) -> Analysi
             max_repair_attempts=settings.max_repair_attempts,
         ),
         signal_generator=SignalGenerator(),
+        prefilter=(
+            LLMCallPrefilter(
+                min_exit_profit_pct=settings.min_exit_profit_pct,
+                min_exit_loss_pct=settings.min_exit_loss_pct,
+                hard_loss_cut_pct=settings.hard_loss_cut_pct,
+            )
+            if settings.llm_prefilter_enabled
+            else None
+        ),
     )
 
 

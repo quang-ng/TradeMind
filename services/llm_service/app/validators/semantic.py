@@ -82,8 +82,7 @@ def validate_signal_semantics(
     is_profitable = pnl is not None and pnl > min_exit_profit_pct
     is_losing = pnl is not None and pnl < -min_exit_loss_pct
     confirmations = context.exit_confirmations if has_open_position else ()
-    confirmed_categories = {_CONFIRMATION_CATEGORIES[c] for c in confirmations}
-    confirmations_sufficient = len(confirmations) >= 2 and len(confirmed_categories) >= 2
+    confirmations_sufficient = _exit_is_sufficient(confirmations)
 
     if has_open_position and pnl is not None and pnl <= -hard_loss_cut_pct:
         reasoning = (
@@ -174,12 +173,7 @@ def validate_signal_semantics(
             "At least three numeric entry confirmations including both trend "
             "and momentum while no position is open."
         )
-        entry_categories = {_ENTRY_CONFIRMATION_CATEGORIES[c] for c in entry_confirmations}
-        entry_is_sufficient = (
-            len(entry_confirmations) >= 3
-            and "trend" in entry_categories
-            and "momentum" in entry_categories
-        )
+        entry_is_sufficient = _entry_is_sufficient(entry_confirmations)
         regime = StrategySelector().select(context).strategy
         if entry_is_sufficient and regime != StrategyName.TREND_FOLLOWING:
             return SemanticValidationResult(
@@ -276,3 +270,58 @@ _ENTRY_CONFIRMATION_CATEGORIES = {
     "higher_highs_and_lows": "price_action",
     "rising_price_on_high_volume": "price_action",
 }
+
+
+def _entry_is_sufficient(entry_confirmations: tuple[str, ...]) -> bool:
+    """The BUY branch's numeric bar: three confirmations including both a
+    trend and a momentum one."""
+    categories = {_ENTRY_CONFIRMATION_CATEGORIES[c] for c in entry_confirmations}
+    return len(entry_confirmations) >= 3 and "trend" in categories and "momentum" in categories
+
+
+def _exit_is_sufficient(exit_confirmations: tuple[str, ...]) -> bool:
+    """The SELL branch's bar: two confirmations spanning two categories."""
+    categories = {_CONFIRMATION_CATEGORIES[c] for c in exit_confirmations}
+    return len(exit_confirmations) >= 2 and len(categories) >= 2
+
+
+def llm_can_change_outcome(
+    context: MarketContext,
+    *,
+    min_exit_profit_pct: float = 0.005,
+    min_exit_loss_pct: float = 0.005,
+    hard_loss_cut_pct: float = 0.015,
+) -> bool:
+    """Whether any model answer could make `validate_signal_semantics`
+    return something other than HOLD for this `context`.
+
+    Mirrors that function's branches exactly — it is the pre-filter's
+    (`prefilter.py`) whole correctness argument, and it reuses the same
+    `_entry_is_sufficient`/`_exit_is_sufficient` helpers so the two cannot
+    drift apart. False means every BUY/SELL/HOLD the model might return
+    would be normalized to HOLD, so the LLM call can be skipped without
+    changing any decision:
+
+    * No open position: BUY survives only when the entry bar passes and the
+      Strategy Selector's regime isn't `TREND_FOLLOWING`; SELL never does.
+    * Open position: SELL survives only with a known PnL beyond the exit
+      cushion and a sufficient cross-category exit bar; BUY never does.
+    * The `hard_loss_cut_pct` backstop is reported as True (keep calling
+      the LLM) even though it forces SELL on any valid model response:
+      today a provider failure there still yields HOLD, and the pre-filter
+      must not change that behavior as a side effect of saving cost.
+    """
+    position = context.position
+    if not position.has_open_position:
+        return (
+            _entry_is_sufficient(context.entry_confirmations)
+            and StrategySelector().select(context).strategy != StrategyName.TREND_FOLLOWING
+        )
+
+    pnl = position.unrealized_pnl_pct
+    if pnl is None:
+        return False
+    if pnl <= -hard_loss_cut_pct:
+        return True
+    beyond_cushion = pnl > min_exit_profit_pct or pnl < -min_exit_loss_pct
+    return beyond_cushion and _exit_is_sufficient(context.exit_confirmations)

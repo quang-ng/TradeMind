@@ -15,6 +15,13 @@ class SentimentState(str, Enum):
     GREED = "GREED"
 
 
+# `Signal.model_name` of a HOLD that `llm_service`'s deterministic pre-filter
+# (`llm_service/app/validators/prefilter.py`) produced without calling the
+# LLM at all. Shared so the Scheduler can tell such cycles apart from real
+# `/analyze` calls — they say nothing about LLM health either way.
+PREFILTER_MODEL_NAME = "deterministic:prefilter"
+
+
 class SignalStatus(str, Enum):
     PENDING = "PENDING"
     CONSUMED = "CONSUMED"

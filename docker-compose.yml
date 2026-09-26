@@ -73,6 +73,9 @@ services:
       # LLMServiceSettings — only set them here if a local ollama runtime is
       # re-added (see the comment above this service).
       ANALYZE_TIMEOUT_SECONDS: ${ANALYZE_TIMEOUT_SECONDS:-450}
+      # Skip LLM calls the deterministic rubric would override to HOLD
+      # anyway (validators/prefilter.py). Set false to call on every cycle.
+      LLM_PREFILTER_ENABLED: ${LLM_PREFILTER_ENABLED:-true}
     ports:
       - "127.0.0.1:8001:8000"
     healthcheck:
