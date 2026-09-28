@@ -222,10 +222,16 @@ async def _run_locked_cycle(
             model_name=llm_result.get("model_name") or "",
             threshold=settings.llm_timeout_alert_threshold,
         )
+        # Commit BEFORE publishing: risk_engine looks the signal up by id the
+        # moment it reads the stream, and an uncommitted row is invisible to
+        # it — it logs `signal_not_found` and drops the signal (this silently
+        # lost 23-45% of signals/day, BUYs included, until 2026-09-28). If
+        # the XADD fails after the commit, the row just stays PENDING and is
+        # never acted on — fails closed (PROJECT.md Section 9.4).
+        await session.commit()
         await redis_client.xadd(
             redis_keys.SIGNALS_PENDING_STREAM, {"signal_id": str(signal_row.id)}
         )
-        await session.commit()
 
     logger.info("cycle_completed", extra={"symbol": symbol, "trace_id": str(trace_id)})
     return trace_id
