@@ -92,6 +92,7 @@ class FakeSession:
         self.added: list = []
         self._llm_config_overrides = llm_config_overrides
         self._open_position = open_position
+        self.committed = False
 
     async def execute(self, _stmt):
         return FakeResult(self._open_position)
@@ -110,7 +111,7 @@ class FakeSession:
                 obj.id = uuid.uuid4()
 
     async def commit(self):
-        pass
+        self.committed = True
 
     async def __aenter__(self):
         return self
@@ -187,6 +188,14 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
     monkeypatch.setattr(jobs, "fetch_closed_candles", _fake_fetch_closed_candles(candles))
     redis_client = FakeRedis()
     captured_session = FakeSession()
+    captured_session.committed_before_publish = []
+    record_xadd = redis_client.xadd
+
+    async def xadd_noting_commit_state(stream, fields):
+        captured_session.committed_before_publish.append(captured_session.committed)
+        await record_xadd(stream, fields)
+
+    redis_client.xadd = xadd_noting_commit_state
 
     trace_id = await jobs.run_cycle(
         "BTC/USDT",
@@ -198,6 +207,9 @@ async def test_run_cycle_persists_signal_and_publishes_to_stream(monkeypatch, se
 
     assert trace_id is not None
     assert len(redis_client.xadd_calls) == 1
+    # The signal must be committed before its id is published, else
+    # risk_engine can read the stream first and miss the row.
+    assert captured_session.committed_before_publish == [True]
     stream, fields = redis_client.xadd_calls[0]
     assert stream == jobs.redis_keys.SIGNALS_PENDING_STREAM
     assert "signal_id" in fields
