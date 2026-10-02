@@ -168,6 +168,12 @@ services:
       WEBHOOK_URL: ${WEBHOOK_URL:-http://admin_api:8000/webhooks/freqtrade}
       WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
       DRY_RUN: ${DRY_RUN:-true}
+      # Rests Freqtrade's ATR/trailing stop on Binance as a STOP_LOSS_LIMIT so
+      # open positions stay protected while the VPS/bot is down; the bot's
+      # own market-exit stop check keeps running (PROJECT.md 9.2/9.4). Set
+      # false to roll back — then cancel leftover Stop-Limit orders on
+      # Binance by hand.
+      STOPLOSS_ON_EXCHANGE: ${STOPLOSS_ON_EXCHANGE:-true}
       # Must mirror the scheduler's SYMBOLS above — docker-entrypoint.sh
       # turns this comma-separated value into pair_whitelist's JSON array.
       SYMBOLS: ${SYMBOLS:-BTC/USDT,ETH/USDT,BNB/USDT,XRP/USDT}

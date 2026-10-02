@@ -9,6 +9,15 @@
     "db_url": "${FREQTRADE_DB_URL}",
     "cancel_open_orders_on_exit": false,
     "trading_mode": "spot",
+    "order_types": {
+        "entry": "limit",
+        "exit": "limit",
+        "emergency_exit": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": ${STOPLOSS_ON_EXCHANGE},
+        "stoploss_on_exchange_interval": 60,
+        "stoploss_on_exchange_limit_ratio": 0.97
+    },
     "unfilledtimeout": {
         "entry": 10,
         "exit": 10,

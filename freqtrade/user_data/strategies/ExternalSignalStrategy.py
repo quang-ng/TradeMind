@@ -1,8 +1,12 @@
+import logging
 from datetime import datetime
 
+from freqtrade.enums import ExitCheckTuple, ExitType
 from freqtrade.persistence import Trade
 from freqtrade.strategy import IStrategy, stoploss_from_absolute
 from pandas import DataFrame
+
+logger = logging.getLogger(__name__)
 
 
 class ExternalSignalStrategy(IStrategy):
@@ -21,6 +25,15 @@ class ExternalSignalStrategy(IStrategy):
     per-trade by `custom_stoploss()` below, which falls back to the static
     `stoploss` if the tag is missing or malformed — it must never fail
     open to "no stop."
+
+    Stop enforcement is two-layered (PROJECT.md Section 9.2). With
+    `order_types.stoploss_on_exchange` on (config.json.tpl,
+    `STOPLOSS_ON_EXCHANGE`), Freqtrade keeps the current stop resting on
+    Binance as a STOP_LOSS_LIMIT — the layer that still protects a position
+    while the VPS/bot is down. That alone would switch off the bot's own
+    stop check in live mode; `ft_stoploss_reached()` below restores it, so
+    the bot still market-exits the moment price touches the stop, including
+    when the exchange stop-limit was gapped through and sits unfilled.
     """
 
     INTERFACE_VERSION = 3
@@ -174,6 +187,11 @@ class ExternalSignalStrategy(IStrategy):
         the moment it's most needed. Freqtrade never loosens a trade's
         stored stoploss (`Trade.adjust_stop_loss`), so returning the looser
         candidate is always a safe no-op.
+
+        Keep the `after_fill` parameter: Freqtrade only calls this right
+        after the entry fills when the signature declares it
+        (`strategy_resolver.py`), which is what puts the first exchange
+        stop order at the ATR stop instead of the -8% static floor.
         """
         tag = trade.enter_tag or ""
         try:
@@ -195,3 +213,110 @@ class ExternalSignalStrategy(IStrategy):
             stop_rate = max(stop_rate, trailing_rate)
 
         return stoploss_from_absolute(stop_rate=stop_rate, current_rate=current_rate)
+
+    def ft_stoploss_reached(
+        self,
+        current_rate: float,
+        trade: Trade,
+        current_time: datetime,
+        current_profit: float,
+        force_stoploss: float,
+        low: float | None = None,
+        high: float | None = None,
+        bound_profit: float | None = None,
+    ) -> ExitCheckTuple:
+        """Keep the bot-side stop check alive while `stoploss_on_exchange` is on.
+
+        Freqtrade 2026.8 (`strategy/interface.py:1649-1653`) stops treating a
+        touched stop as an exit in live mode once `stoploss_on_exchange` is
+        enabled, leaving the resting exchange stop-limit as the only
+        enforcement. That order can miss: price gapping below its limit
+        leaves it unfilled on the book, and after a trailing move the
+        exchange copy of the stop can lag `trade.stop_loss` by up to
+        `stoploss_on_exchange_interval` (60s). PROJECT.md Section 9.2 keeps
+        the exchange order as the VPS-down safety net only — so re-add the
+        exact check Freqtrade skipped, with the same exit types it would
+        have produced. The resulting exit uses `order_types["stoploss"]`
+        (market, config.json.tpl), and `execute_trade_exit` cancels the
+        exchange stop before selling; see `confirm_trade_exit` for the case
+        where that cancel fails because the stop already filled.
+
+        This overrides a Freqtrade-internal method, not a public strategy
+        callback — the signature and the skipped branch are tied to the
+        Freqtrade version pinned in freqtrade/Dockerfile. Re-check
+        `ft_stoploss_reached` in `interface.py` before bumping that pin.
+        """
+        result = super().ft_stoploss_reached(
+            current_rate=current_rate,
+            trade=trade,
+            current_time=current_time,
+            current_profit=current_profit,
+            force_stoploss=force_stoploss,
+            low=low,
+            high=high,
+            bound_profit=bound_profit,
+        )
+        # Dry-run or stoploss_on_exchange off: Freqtrade already ran its own
+        # check above (and super() also refreshed trade.stop_loss via
+        # custom_stoploss), so a hit is already in `result`.
+        if result.exit_type != ExitType.NONE:
+            return result
+        if trade.is_short or trade.stop_loss < (low or current_rate):
+            return result
+
+        exit_type = (
+            ExitType.TRAILING_STOP_LOSS if trade.is_stop_loss_trailing else ExitType.STOP_LOSS
+        )
+        logger.info(
+            "%s - bot-side stop hit: rate %.8f <= stop %.8f (exchange stop is backup only), "
+            "exit_type=%s",
+            trade.pair,
+            low or current_rate,
+            trade.stop_loss,
+            exit_type.value,
+        )
+        return ExitCheckTuple(exit_type=exit_type)
+
+    def confirm_trade_exit(
+        self,
+        pair: str,
+        trade: Trade,
+        order_type: str,
+        amount: float,
+        rate: float,
+        time_in_force: str,
+        exit_reason: str,
+        current_time: datetime,
+        **kwargs,
+    ) -> bool:
+        """Refuse to sell while an exchange stop order may still hold or have sold the coins.
+
+        `execute_trade_exit` cancels the resting exchange stop just before
+        calling this hook. If that cancel failed — typically Binance -2011
+        because the stop filled a moment earlier — Freqtrade only logs it and
+        the stop order stays open in its DB. Selling now could only succeed
+        by selling coins that aren't this trade's (anything else held in the
+        account), so fail closed instead: the next loop's
+        `handle_stoploss_on_exchange` fetches the stop order and closes the
+        trade as `stoploss_on_exchange` if it filled, or the exit is retried
+        once the stop is confirmed cancelled.
+
+        Only applies with `stoploss_on_exchange` on — that's the only mode in
+        which Freqtrade re-syncs its stop orders with Binance every loop.
+        With it off, stop orders left over from before a rollback (which the
+        operator cancels by hand, PROJECT.md Section 9.4) would stay "open"
+        in the DB forever and block every exit.
+        """
+        if not self.order_types.get("stoploss_on_exchange"):
+            return True
+        if trade.has_open_sl_orders:
+            logger.warning(
+                "%s - exit (%s) denied: exchange stop order(s) %s still open after "
+                "cancel attempt; may have filled — waiting for the next "
+                "stoploss-on-exchange check",
+                pair,
+                exit_reason,
+                [o.order_id for o in trade.open_sl_orders],
+            )
+            return False
+        return True

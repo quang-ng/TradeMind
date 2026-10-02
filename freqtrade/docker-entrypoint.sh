@@ -2,6 +2,7 @@
 set -eu
 
 . /select-db-url.sh
+. /validate-stoploss-on-exchange.sh
 
 python3 - <<'PYEOF'
 import json
