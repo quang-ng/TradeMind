@@ -46,6 +46,7 @@ import {
   updateLLMConfig,
   updateRiskConfig,
 } from './api'
+import { viLabel } from './labels'
 import { compactNumber, dateTime, duration, money, percent, readable, rMultiple, shortId, timeAgo } from './format'
 import type {
   Action,
@@ -65,12 +66,12 @@ type Page = 'overview' | 'signals' | 'trades' | 'performance' | 'risk' | 'llm'
 type Detail = { kind: 'trace'; id: string } | { kind: 'signal'; id: string } | null
 
 const nav: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'signals', label: 'Signals & decisions', icon: SignalIcon },
-  { id: 'trades', label: 'Trades', icon: WalletCards },
-  { id: 'performance', label: 'Performance', icon: BarChart3 },
-  { id: 'risk', label: 'Risk controls', icon: SlidersHorizontal },
-  { id: 'llm', label: 'LLM engine', icon: Bot },
+  { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard },
+  { id: 'signals', label: 'Tín hiệu & quyết định', icon: SignalIcon },
+  { id: 'trades', label: 'Giao dịch', icon: WalletCards },
+  { id: 'performance', label: 'Hiệu quả', icon: BarChart3 },
+  { id: 'risk', label: 'Kiểm soát rủi ro', icon: SlidersHorizontal },
+  { id: 'llm', label: 'Cấu hình LLM', icon: Bot },
 ]
 
 export default function App() {
@@ -102,9 +103,9 @@ export default function App() {
           sessionStorage.removeItem('trademind_api_key')
           setAuthenticated(false)
           setData(null)
-          setError('That API key was not accepted. Check ADMIN_API_KEY and try again.')
+          setError('API key không hợp lệ. Kiểm tra ADMIN_API_KEY rồi thử lại.')
         } else {
-          setError(caught instanceof Error ? caught.message : 'Unable to reach TradeMind')
+          setError(caught instanceof Error ? caught.message : 'Không kết nối được tới TradeMind')
         }
       } finally {
         setLoading(false)
@@ -147,7 +148,7 @@ export default function App() {
       <div className="loading-screen">
         <Brand />
         <LoaderCircle className="spin" size={28} />
-        <p>Opening your trading console…</p>
+        <p>Đang mở bảng điều khiển…</p>
       </div>
     )
   }
@@ -156,28 +157,28 @@ export default function App() {
     return (
       <div className="loading-screen">
         <XCircle size={34} />
-        <h2>Console unavailable</h2>
+        <h2>Không mở được bảng điều khiển</h2>
         <p>{error}</p>
         <button className="button primary" onClick={() => void refresh()}>
-          Try again
+          Thử lại
         </button>
-        <button className="button ghost" onClick={logout}>Use another API key</button>
+        <button className="button ghost" onClick={logout}>Dùng API key khác</button>
       </div>
     )
   }
 
-  const pageTitle = nav.find((item) => item.id === page)?.label ?? 'Overview'
+  const pageTitle = nav.find((item) => item.id === page)?.label ?? 'Tổng quan'
 
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-head">
           <Brand />
-          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
+          <button className="icon-button mobile-only" onClick={() => setSidebarOpen(false)} aria-label="Đóng menu">
             <X size={20} />
           </button>
         </div>
-        <nav className="nav-list" aria-label="Main navigation">
+        <nav className="nav-list" aria-label="Điều hướng chính">
           {nav.map((item) => (
             <button
               key={item.id}
@@ -199,34 +200,34 @@ export default function App() {
           <div className={`mode-card ${data.status.killswitch_enabled ? 'stopped' : ''}`}>
             <div className="mode-icon">{data.status.killswitch_enabled ? <ShieldOff /> : <ShieldCheck />}</div>
             <div>
-              <strong>{data.status.killswitch_enabled ? 'Trading paused' : 'Risk engine active'}</strong>
-              <span>{data.status.dry_run ? 'Dry-run · simulated funds' : 'Live mode'}</span>
+              <strong>{data.status.killswitch_enabled ? 'Đang tạm dừng giao dịch' : 'Bộ kiểm soát rủi ro đang chạy'}</strong>
+              <span>{data.status.dry_run ? 'Chạy thử · tiền giả lập' : 'Giao dịch thật'}</span>
             </div>
           </div>
           <button className="nav-item logout" onClick={logout}>
-            <LogOut size={18} /> End session
+            <LogOut size={18} /> Đăng xuất
           </button>
         </div>
       </aside>
 
-      {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
+      {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Đóng menu" />}
 
       <main className="main-content">
         <header className="topbar">
           <div className="topbar-title">
-            <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+            <button className="icon-button mobile-only" onClick={() => setSidebarOpen(true)} aria-label="Mở menu">
               <Menu size={21} />
             </button>
             <div>
               <h1>{pageTitle}</h1>
-              <p>Operator console · {data.status.dry_run ? 'Dry-run environment' : 'Live environment'}</p>
+              <p>Bảng điều khiển · {data.status.dry_run ? 'Môi trường chạy thử' : 'Môi trường thật'}</p>
             </div>
           </div>
           <div className="topbar-actions">
             <span className="updated desktop-only">
-              <span className="online-dot" /> Updated {lastUpdated ? timeAgo(lastUpdated.toISOString()) : 'now'}
+              <span className="online-dot" /> Cập nhật {lastUpdated ? timeAgo(lastUpdated.toISOString()) : 'vừa xong'}
             </span>
-            <button className="icon-button" onClick={() => void refresh(true)} aria-label="Refresh data" disabled={refreshing}>
+            <button className="icon-button" onClick={() => void refresh(true)} aria-label="Làm mới dữ liệu" disabled={refreshing}>
               <RefreshCw className={refreshing ? 'spin' : ''} size={18} />
             </button>
             <button
@@ -234,7 +235,7 @@ export default function App() {
               onClick={() => setKillDialog(true)}
             >
               {data.status.killswitch_enabled ? <Play size={17} /> : <Octagon size={17} />}
-              {data.status.killswitch_enabled ? 'Resume trading' : 'Stop trading'}
+              {data.status.killswitch_enabled ? 'Tiếp tục giao dịch' : 'Dừng giao dịch'}
             </button>
           </div>
         </header>
@@ -242,8 +243,8 @@ export default function App() {
         {error && (
           <div className="error-banner">
             <AlertTriangle size={18} />
-            <span>{error}. Showing the last successfully loaded snapshot.</span>
-            <button onClick={() => setError(null)} aria-label="Dismiss"><X size={16} /></button>
+            <span>{error}. Đang hiển thị dữ liệu tải thành công gần nhất.</span>
+            <button onClick={() => setError(null)} aria-label="Đóng"><X size={16} /></button>
           </div>
         )}
 
@@ -294,7 +295,7 @@ function Brand() {
   return (
     <div className="brand">
       <div className="brand-mark"><TrendingUp size={23} /></div>
-      <div><strong>TradeMind</strong><span>Operator console</span></div>
+      <div><strong>TradeMind</strong><span>Bảng điều khiển</span></div>
     </div>
   )
 }
@@ -311,41 +312,41 @@ function Login({ onConnect, error }: { onConnect: (key: string) => void; error: 
       <section className="login-story">
         <Brand />
         <div className="story-copy">
-          <span className="eyebrow"><span className="online-dot" /> PRIVATE OPERATOR ACCESS</span>
-          <h1>Your trading system,<br /><em>in one clear view.</em></h1>
-          <p>Monitor every signal, risk decision, order, position, and dollar—without opening an SSH session.</p>
+          <span className="eyebrow"><span className="online-dot" /> TRUY CẬP RIÊNG CHO NGƯỜI VẬN HÀNH</span>
+          <h1>Hệ thống giao dịch của bạn,<br /><em>gói gọn trong một màn hình.</em></h1>
+          <p>Theo dõi mọi tín hiệu, quyết định rủi ro, lệnh, vị thế và từng đồng tiền—không cần SSH vào máy chủ.</p>
           <div className="trust-row">
-            <span><ShieldCheck size={17} /> Risk engine enforced</span>
-            <span><Bot size={17} /> LLM has no execution access</span>
+            <span><ShieldCheck size={17} /> Luôn qua kiểm soát rủi ro</span>
+            <span><Bot size={17} /> LLM không có quyền đặt lệnh</span>
           </div>
         </div>
-        <p className="login-foot">TradeMind is self-hosted and designed for a single trusted operator.</p>
+        <p className="login-foot">TradeMind tự vận hành và dành cho một người vận hành tin cậy duy nhất.</p>
       </section>
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
           <div className="login-icon"><KeyRound size={25} /></div>
-          <h2>Open operator console</h2>
-          <p>Enter the <code>ADMIN_API_KEY</code> configured on this TradeMind deployment.</p>
-          <label htmlFor="api-key">Admin API key</label>
+          <h2>Mở bảng điều khiển</h2>
+          <p>Nhập <code>ADMIN_API_KEY</code> đã cấu hình cho hệ thống TradeMind này.</p>
+          <label htmlFor="api-key">API key quản trị</label>
           <div className="secret-field">
             <input
               id="api-key"
               type={visible ? 'text' : 'password'}
               value={key}
               onChange={(event) => setKey(event.target.value)}
-              placeholder="Paste your API key"
+              placeholder="Dán API key của bạn"
               autoComplete="current-password"
               autoFocus
             />
-            <button type="button" onClick={() => setVisible(!visible)} aria-label={visible ? 'Hide API key' : 'Show API key'}>
+            <button type="button" onClick={() => setVisible(!visible)} aria-label={visible ? 'Ẩn API key' : 'Hiện API key'}>
               {visible ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
           {error && <div className="form-error"><AlertTriangle size={16} /> {error}</div>}
           <button className="button primary login-button" type="submit" disabled={!key.trim()}>
-            Connect securely <ArrowRight size={17} />
+            Kết nối an toàn <ArrowRight size={17} />
           </button>
-          <div className="session-note"><LockKeyhole size={15} /> The key stays in this browser tab and is cleared when the session ends.</div>
+          <div className="session-note"><LockKeyhole size={15} /> Key chỉ lưu trong tab trình duyệt này và sẽ bị xóa khi kết thúc phiên.</div>
         </form>
       </section>
     </main>
@@ -371,28 +372,28 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
         <div>
           <span className="status-orb">{status.killswitch_enabled ? <ShieldOff /> : <ShieldCheck />}</span>
           <div>
-            <strong>{status.killswitch_enabled ? 'New entries are paused' : 'All systems monitoring'}</strong>
-            <p>{status.killswitch_enabled ? 'The global kill switch is blocking all new entries.' : 'Risk controls are active and every trade remains independently evaluated.'}</p>
+            <strong>{status.killswitch_enabled ? 'Đang tạm dừng mở lệnh mới' : 'Hệ thống đang theo dõi bình thường'}</strong>
+            <p>{status.killswitch_enabled ? 'Công tắc dừng khẩn cấp đang chặn mọi lệnh mua mới.' : 'Kiểm soát rủi ro đang bật, mọi giao dịch đều được đánh giá độc lập.'}</p>
           </div>
         </div>
-        <span className={`mode-pill ${status.dry_run ? '' : 'live'}`}>{status.dry_run ? 'DRY RUN' : 'LIVE FUNDS'}</span>
+        <span className={`mode-pill ${status.dry_run ? '' : 'live'}`}>{status.dry_run ? 'CHẠY THỬ' : 'TIỀN THẬT'}</span>
       </section>
 
       <section className="metric-grid">
-        <MetricCard label="Portfolio equity" value={money(status.equity_usdt)} note={`${money(status.free_balance_usdt)} free USDT · live Freqtrade balance`} icon={<CircleDollarSign />} />
+        <MetricCard label="Tổng tài sản" value={money(status.equity_usdt)} note={`${money(status.free_balance_usdt)} USDT khả dụng · số dư Freqtrade`} icon={<CircleDollarSign />} />
         <MetricCard
-          label="Today’s P&L"
+          label="Lãi/lỗ hôm nay"
           value={percent(status.daily_pnl_pct)}
-          note={`${money(totalPnl)} all-time realized`}
+          note={`${money(totalPnl)} lãi/lỗ đã chốt từ trước tới nay`}
           icon={Number(status.daily_pnl_pct) >= 0 ? <ArrowUpRight /> : <ArrowDownRight />}
           tone={Number(status.daily_pnl_pct) >= 0 ? 'positive' : 'negative'}
         />
-        <MetricCard label="Open exposure" value={money(exposure)} note={`${status.open_positions} of ${data.config.max_open_positions} positions`} icon={<WalletCards />} />
-        <MetricCard label="Risk approvals" value={percent(signalApproval)} note={`${approved} approved · ${failedOrders} failed orders`} icon={<Gauge />} tone={failedOrders ? 'negative' : undefined} />
+        <MetricCard label="Vốn đang dùng" value={money(exposure)} note={`${status.open_positions} / ${data.config.max_open_positions} vị thế`} icon={<WalletCards />} />
+        <MetricCard label="Tỷ lệ được duyệt" value={percent(signalApproval)} note={`${approved} được duyệt · ${failedOrders} lệnh lỗi`} icon={<Gauge />} tone={failedOrders ? 'negative' : undefined} />
       </section>
 
       <section className="overview-grid">
-        <Panel className="pnl-panel" title="Realized performance" subtitle="Cumulative closed-position P&L">
+        <Panel className="pnl-panel" title="Lãi/lỗ đã chốt" subtitle="Lãi/lỗ lũy kế của các vị thế đã đóng">
           {chartData.length > 0 ? (
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
@@ -406,15 +407,15 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
                   <CartesianGrid stroke="#21302c" strokeDasharray="4 6" vertical={false} />
                   <XAxis dataKey="label" stroke="#778982" tickLine={false} axisLine={false} fontSize={11} />
                   <YAxis stroke="#778982" tickLine={false} axisLine={false} fontSize={11} tickFormatter={(value) => `$${value}`} />
-                  <Tooltip contentStyle={{ background: '#111d1a', border: '1px solid #2a3b36', borderRadius: 10 }} formatter={(value) => [money(Number(value)), 'Cumulative P&L']} />
+                  <Tooltip contentStyle={{ background: '#111d1a', border: '1px solid #2a3b36', borderRadius: 10 }} formatter={(value) => [money(Number(value)), 'Lãi/lỗ lũy kế']} />
                   <Area type="monotone" dataKey="pnl" stroke="#30d39a" strokeWidth={2.2} fill="url(#pnlFill)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          ) : <EmptyState icon={<TrendingUp />} title="Performance begins after a position closes" text="Closed-position profit and loss will chart here automatically." />}
+          ) : <EmptyState icon={<TrendingUp />} title="Biểu đồ sẽ hiện sau khi có vị thế đóng" text="Lãi/lỗ của các vị thế đã đóng sẽ tự động vẽ ở đây." />}
         </Panel>
 
-        <Panel title="Trading pairs" subtitle="Latest 1-hour analysis cycles">
+        <Panel title="Cặp giao dịch" subtitle="Chu kỳ phân tích 1 giờ gần nhất">
           <div className="pair-list">
             {Object.entries(status.pairs).map(([symbol, pair]) => {
               const latest = signals.find((signal) => signal.symbol === symbol)
@@ -431,13 +432,13 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
       </section>
 
       <Panel
-        title="Latest signal flow"
-        subtitle="From LLM opinion to deterministic risk decision"
-        action={<button className="text-button" onClick={() => onNavigate('signals')}>View all <ChevronRight size={15} /></button>}
+        title="Tín hiệu mới nhất"
+        subtitle="Từ nhận định của LLM tới quyết định rủi ro"
+        action={<button className="text-button" onClick={() => onNavigate('signals')}>Xem tất cả <ChevronRight size={15} /></button>}
       >
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Market</th><th>LLM signal</th><th>Confidence</th><th>Risk outcome</th><th>Price</th><th>Received</th><th /></tr></thead>
+            <thead><tr><th>Cặp</th><th>Tín hiệu LLM</th><th>Độ tin cậy</th><th>Kết quả rủi ro</th><th>Giá</th><th>Thời gian</th><th /></tr></thead>
             <tbody>
               {latestSignals.map((signal) => {
                 const decision = decisions.find((item) => item.signal_id === signal.id)
@@ -449,11 +450,11 @@ function Overview({ data, onTrace, onNavigate }: { data: DashboardData; onTrace:
                     <td><DecisionBadge decision={decision} /></td>
                     <td className="mono">{money(signal.price)}</td>
                     <td>{dateTime(signal.created_at)}</td>
-                    <td><button className="row-button" onClick={() => onTrace(signal.trace_id)} aria-label="Open trace"><ChevronRight size={17} /></button></td>
+                    <td><button className="row-button" onClick={() => onTrace(signal.trace_id)} aria-label="Mở chi tiết"><ChevronRight size={17} /></button></td>
                   </tr>
                 )
               })}
-              {latestSignals.length === 0 && <tr><td colSpan={7}><EmptyTable text="No signals have been generated yet." /></td></tr>}
+              {latestSignals.length === 0 && <tr><td colSpan={7}><EmptyTable text="Chưa có tín hiệu nào." /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -471,11 +472,11 @@ function SignalsPage({ data, onDetail }: { data: DashboardData; onDetail: (detai
   const signals = data.signals.filter((signal) => (symbol === 'ALL' || signal.symbol === symbol) && (action === 'ALL' || signal.action === action))
   return (
     <div className="page-stack">
-      <section className="section-intro"><div><h2>AI signals and risk decisions</h2><p>Every model opinion is recorded. Only deterministic risk approval can produce an order.</p></div><div className="legend"><span><i className="legend-dot llm" /> LLM opinion</span><ArrowRight size={14} /><span><i className="legend-dot risk" /> Risk authority</span></div></section>
+      <section className="section-intro"><div><h2>Tín hiệu AI và quyết định rủi ro</h2><p>Mọi nhận định của mô hình đều được lưu lại. Chỉ khi bộ kiểm soát rủi ro duyệt mới được đặt lệnh.</p></div><div className="legend"><span><i className="legend-dot llm" /> Nhận định LLM</span><ArrowRight size={14} /><span><i className="legend-dot risk" /> Kiểm soát rủi ro</span></div></section>
       <div className="filters">
-        <Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} />
-        <Filter label="Action" value={action} onChange={setAction} options={['ALL', 'BUY', 'SELL', 'HOLD']} />
-        <span className="result-count">{signals.length} signals</span>
+        <Filter label="Cặp" value={symbol} onChange={setSymbol} options={symbolOptions} />
+        <Filter label="Hành động" value={action} onChange={setAction} options={['ALL', 'BUY', 'SELL', 'HOLD']} />
+        <span className="result-count">{signals.length} tín hiệu</span>
       </div>
       <div className="signal-cards">
         {signals.map((signal) => {
@@ -483,7 +484,7 @@ function SignalsPage({ data, onDetail }: { data: DashboardData; onDetail: (detai
           const order = decision ? data.orders.find((item) => item.risk_decision_id === decision.id) : undefined
           return <SignalCard key={signal.id} signal={signal} decision={decision} order={order} onDetail={onDetail} />
         })}
-        {signals.length === 0 && <Panel><EmptyState icon={<SignalIcon />} title="No matching signals" text="Adjust the filters or wait for the next closed candle." /></Panel>}
+        {signals.length === 0 && <Panel><EmptyState icon={<SignalIcon />} title="Không có tín hiệu phù hợp" text="Thử đổi bộ lọc hoặc chờ nến tiếp theo đóng." /></Panel>}
       </div>
     </div>
   )
@@ -498,22 +499,22 @@ function SignalCard({ signal, decision, order, onDetail }: { signal: Signal; dec
       </div>
       <div className="signal-body">
         <div className="opinion-block">
-          <span className="block-label"><Bot size={15} /> LLM OPINION</span>
-          <div className="confidence-line"><strong>{Math.round(Number(signal.confidence) * 100)}% confidence</strong><Confidence value={Number(signal.confidence)} /></div>
+          <span className="block-label"><Bot size={15} /> NHẬN ĐỊNH LLM</span>
+          <div className="confidence-line"><strong>Độ tin cậy {Math.round(Number(signal.confidence) * 100)}%</strong><Confidence value={Number(signal.confidence)} /></div>
           <p>“{signal.reasoning}”</p>
-          <div className="signal-meta"><span>Model <strong>{signal.model_name}</strong></span><span>Price <strong>{money(signal.price)}</strong></span><span>ATR(14) <strong>{money(signal.atr_14)}</strong></span></div>
+          <div className="signal-meta"><span>Mô hình <strong>{signal.model_name}</strong></span><span>Giá <strong>{money(signal.price)}</strong></span><span>ATR(14) <strong>{money(signal.atr_14)}</strong></span></div>
         </div>
         <div className="flow-arrow"><ArrowRight /></div>
         <div className={`decision-block ${decision?.approved ? 'approved' : 'rejected'}`}>
-          <span className="block-label"><ShieldCheck size={15} /> RISK DECISION</span>
+          <span className="block-label"><ShieldCheck size={15} /> QUYẾT ĐỊNH RỦI RO</span>
           <DecisionBadge decision={decision} large />
           {decision ? (
-            decision.approved ? <div className="decision-facts"><span>Size <strong>{money(decision.position_size_usdt)}</strong></span><span>Stop <strong>{money(decision.stop_loss_price)}</strong></span><span>Order <strong>{order ? readable(order.status) : 'Pending'}</strong></span></div>
+            decision.approved ? <div className="decision-facts"><span>Khối lượng <strong>{money(decision.position_size_usdt)}</strong></span><span>Cắt lỗ <strong>{money(decision.stop_loss_price)}</strong></span><span>Lệnh <strong>{order ? readable(order.status) : 'Đang chờ'}</strong></span></div>
               : <p className="reject-reason">{readable(decision.rejection_reason)}</p>
-          ) : <p className="muted">Waiting for risk engine evaluation</p>}
+          ) : <p className="muted">Đang chờ bộ kiểm soát rủi ro đánh giá</p>}
         </div>
       </div>
-      <footer className="signal-footer"><button className="text-button" onClick={() => onDetail({ kind: 'signal', id: signal.id })}>Raw LLM detail</button><button className="text-button" onClick={() => onDetail({ kind: 'trace', id: signal.trace_id })}>Full audit trail <ChevronRight size={15} /></button></footer>
+      <footer className="signal-footer"><button className="text-button" onClick={() => onDetail({ kind: 'signal', id: signal.id })}>Chi tiết LLM</button><button className="text-button" onClick={() => onDetail({ kind: 'trace', id: signal.trace_id })}>Xem toàn bộ nhật ký <ChevronRight size={15} /></button></footer>
     </article>
   )
 }
@@ -593,48 +594,48 @@ function TradesPage({ data, onTrace }: { data: DashboardData; onTrace: (id: stri
     <div className="page-stack">
       <section className="section-intro">
         <div>
-          <h2>Trades</h2>
-          <p>One row per position — the complete lifecycle from setup score through risk sizing, execution and outcome. Aggregate statistics live on the Performance page.</p>
+          <h2>Giao dịch</h2>
+          <p>Mỗi dòng là một vị thế — toàn bộ vòng đời từ điểm thiết lập, tính khối lượng theo rủi ro, khớp lệnh tới kết quả. Thống kê tổng hợp xem ở trang Hiệu quả.</p>
         </div>
       </section>
 
       <section className="mini-metrics">
-        <MetricCard label="Open positions" value={String(open.length)} note="Long-only spot positions" icon={<Activity />} />
+        <MetricCard label="Vị thế đang mở" value={String(open.length)} note="Chỉ mua spot (không bán khống)" icon={<Activity />} />
         <MetricCard
-          label="Realized P&L"
+          label="Lãi/lỗ đã chốt"
           value={money(realized)}
-          note={`${closed.length} closed trade${closed.length === 1 ? '' : 's'}`}
+          note={`${closed.length} lệnh đã đóng`}
           icon={<CircleDollarSign />}
           tone={realized >= 0 ? 'positive' : 'negative'}
         />
         <MetricCard
-          label="Win rate"
+          label="Tỷ lệ thắng"
           value={closed.length ? percent(winners / closed.length) : '—'}
-          note={`${winners} profitable close${winners === 1 ? '' : 's'}`}
+          note={`${winners} lệnh có lãi`}
           icon={<TrendingUp />}
         />
       </section>
 
       <div className="filters">
-        <Filter label="Market" value={symbol} onChange={setSymbol} options={symbolOptions} />
-        <Filter label="Status" value={statusFilter} onChange={setStatusFilter} options={['ALL', 'OPEN', 'CLOSED']} />
-        <Filter label="Setup regime" value={regime} onChange={setRegime} options={regimeOptions} />
-        <span className="result-count">{filtered.length} trade{filtered.length === 1 ? '' : 's'}</span>
+        <Filter label="Cặp" value={symbol} onChange={setSymbol} options={symbolOptions} />
+        <Filter label="Trạng thái" value={statusFilter} onChange={setStatusFilter} options={['ALL', 'OPEN', 'CLOSED']} />
+        <Filter label="Kiểu thiết lập" value={regime} onChange={setRegime} options={regimeOptions} />
+        <span className="result-count">{filtered.length} giao dịch</span>
       </div>
 
-      <Panel title="Trade ledger" subtitle="Newest first · select a row for the full setup, risk and execution breakdown">
+      <Panel title="Sổ giao dịch" subtitle="Mới nhất trước · bấm vào một dòng để xem chi tiết thiết lập, rủi ro và khớp lệnh">
         <div className="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>Market / Side</th>
-                <th>Setup regime</th>
-                <th>Score</th>
-                <th>Entry → Exit</th>
-                <th>P&L</th>
-                <th>R multiple</th>
-                <th>Exit reason</th>
-                <th>Opened</th>
+                <th>Cặp / Chiều</th>
+                <th>Kiểu thiết lập</th>
+                <th>Điểm</th>
+                <th>Giá vào → Giá ra</th>
+                <th>Lãi/lỗ</th>
+                <th>Bội số R</th>
+                <th>Lý do thoát</th>
+                <th>Mở lúc</th>
                 <th />
               </tr>
             </thead>
@@ -644,7 +645,7 @@ function TradesPage({ data, onTrace }: { data: DashboardData; onTrace: (id: stri
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9}><EmptyTable text="No trades match these filters." /></td>
+                  <td colSpan={9}><EmptyTable text="Không có giao dịch nào khớp bộ lọc." /></td>
                 </tr>
               )}
             </tbody>
@@ -679,7 +680,7 @@ function TradeRow({ trade, onOpen }: { trade: Trade; onOpen: () => void }) {
           <Coin symbol={position.symbol} small />
           <div>
             <strong>{position.symbol}</strong>
-            <small className="sub-cell">Long</small>
+            <small className="sub-cell">Mua</small>
           </div>
         </div>
       </td>
@@ -688,10 +689,10 @@ function TradeRow({ trade, onOpen }: { trade: Trade; onOpen: () => void }) {
       <td className="mono">{money(position.entry_price)} → {isOpen ? '—' : money(position.exit_price)}</td>
       <td className={pnlTone}>
         {pnl == null ? '—' : money(pnl)}
-        {pnlPct != null && <small className="sub-cell">{percent(pnlPct)}{isOpen ? ' unreal.' : ''}</small>}
+        {pnlPct != null && <small className="sub-cell">{percent(pnlPct)}{isOpen ? ' tạm tính' : ''}</small>}
       </td>
       <td className={`mono ${perfToneClass(position.r_multiple ?? null)}`}>{rMultiple(position.r_multiple ?? null)}</td>
-      <td>{isOpen ? <span className="badge hold">Open</span> : position.exit_reason ? readable(position.exit_reason) : '—'}</td>
+      <td>{isOpen ? <span className="badge hold">Đang mở</span> : position.exit_reason ? readable(position.exit_reason) : '—'}</td>
       <td>{dateTime(position.opened_at)}</td>
       <td>
         <button
@@ -700,7 +701,7 @@ function TradeRow({ trade, onOpen }: { trade: Trade; onOpen: () => void }) {
             event.stopPropagation()
             onOpen()
           }}
-          aria-label="Open trade detail"
+          aria-label="Mở chi tiết giao dịch"
         >
           <ChevronRight size={17} />
         </button>
@@ -720,12 +721,12 @@ function TradeDrawer({ trade, onClose, onTrace }: { trade: Trade; onClose: () =>
 
   return (
     <div className="drawer-layer">
-      <button className="drawer-scrim" onClick={onClose} aria-label="Close trade detail" />
+      <button className="drawer-scrim" onClick={onClose} aria-label="Đóng chi tiết giao dịch" />
       <aside className="drawer">
         <header>
           <div>
-            <span className="eyebrow">TRADE DETAIL</span>
-            <h2>{position.symbol} · Long</h2>
+            <span className="eyebrow">CHI TIẾT GIAO DỊCH</span>
+            <h2>{position.symbol} · Mua</h2>
           </div>
           <button className="icon-button" onClick={onClose}><X size={20} /></button>
         </header>
@@ -733,27 +734,27 @@ function TradeDrawer({ trade, onClose, onTrace }: { trade: Trade; onClose: () =>
           <div className="detail-hero">
             <Coin symbol={position.symbol} />
             <div>
-              <strong>{position.symbol} · {isOpen ? 'Open position' : 'Closed'}</strong>
+              <strong>{position.symbol} · {isOpen ? 'Vị thế đang mở' : 'Đã đóng'}</strong>
               <span>
-                Opened {dateTime(position.opened_at)}
-                {position.closed_at ? ` · closed ${dateTime(position.closed_at)}` : ''}
+                Mở lúc {dateTime(position.opened_at)}
+                {position.closed_at ? ` · đóng lúc ${dateTime(position.closed_at)}` : ''}
               </span>
             </div>
             <span className={`badge ${isOpen ? 'hold' : pnlNum !== null && pnlNum < 0 ? 'rejected' : 'approved'} large`}>
-              {isOpen ? 'Open' : pnlNum === null ? 'Closed' : `${pnlNum >= 0 ? '+' : ''}${money(pnlNum)}`}
+              {isOpen ? 'Đang mở' : pnlNum === null ? 'Đã đóng' : `${pnlNum >= 0 ? '+' : ''}${money(pnlNum)}`}
             </span>
           </div>
 
-          <h3>Setup &amp; score</h3>
+          <h3>Thiết lập &amp; điểm</h3>
           {hasSetup ? (
             <>
               <dl className="detail-list">
-                <div><dt>Setup regime</dt><dd>{trade.setupRegime ? readable(trade.setupRegime) : '—'}</dd></div>
-                <div><dt>Volatility regime</dt><dd>{trade.volatilityRegime ? readable(trade.volatilityRegime) : '—'}</dd></div>
-                <div><dt>Trade score</dt><dd>{trade.tradeScore ?? '—'}{trade.tradeScore != null ? ' / 100' : ''}</dd></div>
-                <div><dt>LLM confidence</dt><dd>{signal ? `${Math.round(Number(signal.confidence) * 100)}%` : '—'}</dd></div>
-                <div><dt>LLM action</dt><dd>{signal ? signal.action : '—'}</dd></div>
-                <div><dt>Model</dt><dd>{signal?.model_name ?? '—'}</dd></div>
+                <div><dt>Kiểu thiết lập</dt><dd>{trade.setupRegime ? readable(trade.setupRegime) : '—'}</dd></div>
+                <div><dt>Mức biến động</dt><dd>{trade.volatilityRegime ? readable(trade.volatilityRegime) : '—'}</dd></div>
+                <div><dt>Điểm giao dịch</dt><dd>{trade.tradeScore ?? '—'}{trade.tradeScore != null ? ' / 100' : ''}</dd></div>
+                <div><dt>Độ tin cậy LLM</dt><dd>{signal ? `${Math.round(Number(signal.confidence) * 100)}%` : '—'}</dd></div>
+                <div><dt>Hành động LLM</dt><dd>{signal ? readable(signal.action) : '—'}</dd></div>
+                <div><dt>Mô hình</dt><dd>{signal?.model_name ?? '—'}</dd></div>
               </dl>
               {trade.scoreBreakdown && Object.keys(trade.scoreBreakdown).length > 0 && (
                 <dl className="detail-list">
@@ -765,40 +766,40 @@ function TradeDrawer({ trade, onClose, onTrace }: { trade: Trade; onClose: () =>
               {signal?.reasoning && <div className="reason-box">{signal.reasoning}</div>}
             </>
           ) : (
-            <p className="muted">No setup data for this trade — it opened before setup scoring, or its signal is outside the loaded history.</p>
+            <p className="muted">Không có dữ liệu thiết lập — lệnh mở trước khi có chấm điểm, hoặc tín hiệu nằm ngoài lịch sử đã tải.</p>
           )}
 
-          <h3>Risk</h3>
+          <h3>Rủi ro</h3>
           {decision ? (
             <dl className="detail-list">
-              <div><dt>Position size</dt><dd>{money(decision.position_size_usdt)}</dd></div>
-              <div><dt>Stop loss</dt><dd>{money(decision.stop_loss_price)}</dd></div>
-              <div><dt>Stop distance</dt><dd>{decision.stop_distance_pct == null ? '—' : percent(decision.stop_distance_pct)}</dd></div>
-              <div><dt>Nominal risk budget</dt><dd>{money(decision.nominal_risk_amount_usdt ?? null)}</dd></div>
-              <div><dt>Actual risk (1R)</dt><dd>{money(decision.actual_risk_usdt ?? null)}</dd></div>
-              <div><dt>Risk % applied</dt><dd>{decision.risk_pct_applied == null ? '—' : percent(decision.risk_pct_applied)}</dd></div>
-              <div><dt>Equity snapshot</dt><dd>{money(decision.equity_snapshot_usdt)}</dd></div>
+              <div><dt>Khối lượng vị thế</dt><dd>{money(decision.position_size_usdt)}</dd></div>
+              <div><dt>Giá cắt lỗ</dt><dd>{money(decision.stop_loss_price)}</dd></div>
+              <div><dt>Khoảng cách cắt lỗ</dt><dd>{decision.stop_distance_pct == null ? '—' : percent(decision.stop_distance_pct)}</dd></div>
+              <div><dt>Ngân sách rủi ro danh nghĩa</dt><dd>{money(decision.nominal_risk_amount_usdt ?? null)}</dd></div>
+              <div><dt>Rủi ro thực tế (1R)</dt><dd>{money(decision.actual_risk_usdt ?? null)}</dd></div>
+              <div><dt>% rủi ro áp dụng</dt><dd>{decision.risk_pct_applied == null ? '—' : percent(decision.risk_pct_applied)}</dd></div>
+              <div><dt>Tài sản lúc vào lệnh</dt><dd>{money(decision.equity_snapshot_usdt)}</dd></div>
             </dl>
           ) : (
-            <p className="muted">The risk decision for this trade is outside the loaded history.</p>
+            <p className="muted">Quyết định rủi ro của giao dịch này nằm ngoài lịch sử đã tải.</p>
           )}
 
-          <h3>Execution</h3>
+          <h3>Khớp lệnh</h3>
           <dl className="detail-list">
-            <div><dt>Entry price</dt><dd>{money(position.entry_price)}</dd></div>
-            <div><dt>Exit price</dt><dd>{isOpen ? '—' : money(position.exit_price)}</dd></div>
-            <div><dt>Amount</dt><dd>{compactNumber(position.amount)}</dd></div>
-            <div><dt>Entry value</dt><dd>{money(entryValue)}</dd></div>
-            {isOpen && <div><dt>Current price</dt><dd>{money(position.current_price)}</dd></div>}
-            {isOpen && position.price_updated_at && <div><dt>Market mark</dt><dd>{dateTime(position.price_updated_at)}</dd></div>}
+            <div><dt>Giá vào</dt><dd>{money(position.entry_price)}</dd></div>
+            <div><dt>Giá ra</dt><dd>{isOpen ? '—' : money(position.exit_price)}</dd></div>
+            <div><dt>Số lượng</dt><dd>{compactNumber(position.amount)}</dd></div>
+            <div><dt>Giá trị vào lệnh</dt><dd>{money(entryValue)}</dd></div>
+            {isOpen && <div><dt>Giá hiện tại</dt><dd>{money(position.current_price)}</dd></div>}
+            {isOpen && position.price_updated_at && <div><dt>Cập nhật giá lúc</dt><dd>{dateTime(position.price_updated_at)}</dd></div>}
           </dl>
 
-          <h3>Orders</h3>
+          <h3>Lệnh</h3>
           {orders.length > 0 ? (
             <div className="table-scroll">
               <table>
                 <thead>
-                  <tr><th>Order</th><th>Side</th><th>Status</th><th>Filled</th><th>Avg price</th><th>Time</th></tr>
+                  <tr><th>Lệnh</th><th>Chiều</th><th>Trạng thái</th><th>Đã khớp</th><th>Giá TB</th><th>Thời gian</th></tr>
                 </thead>
                 <tbody>
                   {orders.map((order) => (
@@ -818,25 +819,25 @@ function TradeDrawer({ trade, onClose, onTrace }: { trade: Trade; onClose: () =>
               </table>
             </div>
           ) : (
-            <p className="muted">The order records for this trade are outside the loaded history.</p>
+            <p className="muted">Các lệnh của giao dịch này nằm ngoài lịch sử đã tải.</p>
           )}
 
-          <h3>Outcome</h3>
+          <h3>Kết quả</h3>
           <dl className="detail-list">
-            <div><dt>Status</dt><dd>{readable(position.status)}</dd></div>
-            <div><dt>{isOpen ? 'Unrealized P&L' : 'Realized P&L'}</dt><dd>{pnl == null ? '—' : money(pnl)}</dd></div>
-            <div><dt>Return</dt><dd>{pnlPct == null ? '—' : percent(pnlPct)}</dd></div>
-            <div><dt>R multiple</dt><dd>{rMultiple(position.r_multiple ?? null)}</dd></div>
-            <div><dt>Exit reason</dt><dd>{isOpen ? 'Position open' : position.exit_reason ? readable(position.exit_reason) : '—'}</dd></div>
-            <div><dt>Fees{position.fees_estimated ? ' (est.)' : ''}</dt><dd>{money(position.fees_usdt ?? null)}</dd></div>
-            <div><dt>Opened</dt><dd>{dateTime(position.opened_at)}</dd></div>
-            <div><dt>Closed</dt><dd>{position.closed_at ? dateTime(position.closed_at) : '—'}</dd></div>
-            <div><dt>Duration</dt><dd>{position.closed_at ? duration(new Date(position.closed_at).getTime() - new Date(position.opened_at).getTime()) : 'Still open'}</dd></div>
+            <div><dt>Trạng thái</dt><dd>{readable(position.status)}</dd></div>
+            <div><dt>{isOpen ? 'Lãi/lỗ tạm tính' : 'Lãi/lỗ đã chốt'}</dt><dd>{pnl == null ? '—' : money(pnl)}</dd></div>
+            <div><dt>Tỷ suất</dt><dd>{pnlPct == null ? '—' : percent(pnlPct)}</dd></div>
+            <div><dt>Bội số R</dt><dd>{rMultiple(position.r_multiple ?? null)}</dd></div>
+            <div><dt>Lý do thoát</dt><dd>{isOpen ? 'Vị thế đang mở' : position.exit_reason ? readable(position.exit_reason) : '—'}</dd></div>
+            <div><dt>Phí{position.fees_estimated ? ' (ước tính)' : ''}</dt><dd>{money(position.fees_usdt ?? null)}</dd></div>
+            <div><dt>Mở lúc</dt><dd>{dateTime(position.opened_at)}</dd></div>
+            <div><dt>Đóng lúc</dt><dd>{position.closed_at ? dateTime(position.closed_at) : '—'}</dd></div>
+            <div><dt>Thời gian giữ</dt><dd>{position.closed_at ? duration(new Date(position.closed_at).getTime() - new Date(position.opened_at).getTime()) : 'Vẫn đang mở'}</dd></div>
           </dl>
 
           {trade.traceId && (
             <button className="text-button" onClick={() => onTrace(trade.traceId!)}>
-              Full audit trail <ChevronRight size={15} />
+              Xem toàn bộ nhật ký <ChevronRight size={15} />
             </button>
           )}
         </div>
@@ -874,7 +875,7 @@ function PerformancePage({ apiKey, symbols }: { apiKey: string; symbols: string[
       })
       .catch((caught) => {
         if (!active) return
-        setError(caught instanceof Error ? caught.message : 'Could not load performance')
+        setError(caught instanceof Error ? caught.message : 'Không tải được số liệu hiệu quả')
       })
     return () => {
       active = false
@@ -891,89 +892,89 @@ function PerformancePage({ apiKey, symbols }: { apiKey: string; symbols: string[
     <div className="page-stack">
       <section className="section-intro">
         <div>
-          <h2>Trading performance</h2>
-          <p>R-normalized expectancy over the closed-position journal. 1R = the risk actually taken on each trade (RiskDecision.actual_risk_usdt).</p>
+          <h2>Hiệu quả giao dịch</h2>
+          <p>Kỳ vọng chuẩn hóa theo R trên các vị thế đã đóng. 1R = mức rủi ro thực tế của mỗi lệnh (RiskDecision.actual_risk_usdt).</p>
         </div>
       </section>
 
       <div className="filters">
-        <Filter label="Market" value={symbol} onChange={setSymbol} options={['ALL', ...symbols]} />
-        <Filter label="Setup regime" value={regime} onChange={setRegime} options={PERF_REGIMES} />
-        <Filter label="Trade score" value={scoreBucket} onChange={setScoreBucket} options={Object.keys(PERF_SCORE_BUCKETS)} />
+        <Filter label="Cặp" value={symbol} onChange={setSymbol} options={['ALL', ...symbols]} />
+        <Filter label="Kiểu thiết lập" value={regime} onChange={setRegime} options={PERF_REGIMES} />
+        <Filter label="Điểm giao dịch" value={scoreBucket} onChange={setScoreBucket} options={Object.keys(PERF_SCORE_BUCKETS)} />
       </div>
 
       {error && <div className="form-error"><AlertTriangle size={16} /> {error}</div>}
-      {!summary && !error && <Panel><div className="drawer-loading"><LoaderCircle className="spin" /> Computing metrics…</div></Panel>}
+      {!summary && !error && <Panel><div className="drawer-loading"><LoaderCircle className="spin" /> Đang tính toán…</div></Panel>}
 
       {summary && summary.trades === 0 && (
-        <Panel><EmptyState icon={<BarChart3 />} title="No closed trades match these filters" text="Expectancy metrics appear once positions close under the selected filters." /></Panel>
+        <Panel><EmptyState icon={<BarChart3 />} title="Không có lệnh đã đóng khớp bộ lọc" text="Số liệu kỳ vọng sẽ hiện khi có vị thế đóng theo bộ lọc đã chọn." /></Panel>
       )}
 
       {summary && summary.trades > 0 && (
         <>
           <section className="metric-grid">
             <MetricCard
-              label="Win rate"
+              label="Tỷ lệ thắng"
               value={summary.win_rate === null ? '—' : percent(summary.win_rate)}
-              note={`${summary.wins}W · ${summary.losses}L · ${summary.breakeven}BE`}
+              note={`${summary.wins} thắng · ${summary.losses} thua · ${summary.breakeven} hòa`}
               icon={<Gauge />}
             />
             <MetricCard
-              label="Expectancy (R / trade)"
+              label="Kỳ vọng (R / lệnh)"
               value={rMultiple(summary.expectancy_r)}
-              note={`over ${summary.trades_with_r} R-tracked trade${summary.trades_with_r === 1 ? '' : 's'}`}
+              note={`trên ${summary.trades_with_r} lệnh có tính R`}
               icon={<TrendingUp />}
               tone={tone(summary.expectancy_r)}
             />
             <MetricCard
-              label="Total R"
+              label="Tổng R"
               value={rMultiple(summary.total_r)}
-              note={`${money(summary.total_pnl_usdt)} realized P&L`}
+              note={`${money(summary.total_pnl_usdt)} lãi/lỗ đã chốt`}
               icon={<CircleDollarSign />}
               tone={tone(summary.total_r)}
             />
             <MetricCard
-              label="Profit factor"
+              label="Hệ số lợi nhuận"
               value={summary.profit_factor === null ? '—' : compactNumber(summary.profit_factor, 2)}
-              note={summary.profit_factor === null ? 'no losing trade yet' : 'gross profit ÷ gross loss'}
+              note={summary.profit_factor === null ? 'chưa có lệnh thua' : 'tổng lãi ÷ tổng lỗ'}
               icon={<Activity />}
             />
           </section>
 
-          <Panel title="Breakdown" subtitle="Every figure over the filtered closed-trade cohort">
+          <Panel title="Chi tiết" subtitle="Mọi số liệu tính trên các lệnh đã đóng theo bộ lọc">
             <dl className="detail-list">
-              <div><dt>Closed trades</dt><dd>{summary.trades}</dd></div>
-              <div><dt>Wins / Losses / Breakeven</dt><dd>{summary.wins} / {summary.losses} / {summary.breakeven}</dd></div>
-              <div><dt>Avg win</dt><dd>{rMultiple(summary.avg_win_r)}</dd></div>
-              <div><dt>Avg loss</dt><dd>{rMultiple(summary.avg_loss_r)}</dd></div>
-              <div><dt>Total realized P&L</dt><dd>{money(summary.total_pnl_usdt)}</dd></div>
-              <div><dt>Total fees (estimated)</dt><dd>{money(summary.total_fees_usdt)}</dd></div>
-              <div><dt>Max drawdown</dt><dd>{drawdown(summary.max_drawdown_pct)}</dd></div>
-              <div><dt>Avg drawdown</dt><dd>{drawdown(summary.avg_drawdown_pct)}</dd></div>
-              <div><dt>R-tracked trades</dt><dd>{summary.trades_with_r} of {summary.trades}</dd></div>
-              <div><dt>Slippage</dt><dd>not measured</dd></div>
+              <div><dt>Số lệnh đã đóng</dt><dd>{summary.trades}</dd></div>
+              <div><dt>Thắng / Thua / Hòa</dt><dd>{summary.wins} / {summary.losses} / {summary.breakeven}</dd></div>
+              <div><dt>Lãi trung bình</dt><dd>{rMultiple(summary.avg_win_r)}</dd></div>
+              <div><dt>Lỗ trung bình</dt><dd>{rMultiple(summary.avg_loss_r)}</dd></div>
+              <div><dt>Tổng lãi/lỗ đã chốt</dt><dd>{money(summary.total_pnl_usdt)}</dd></div>
+              <div><dt>Tổng phí (ước tính)</dt><dd>{money(summary.total_fees_usdt)}</dd></div>
+              <div><dt>Sụt giảm tối đa</dt><dd>{drawdown(summary.max_drawdown_pct)}</dd></div>
+              <div><dt>Sụt giảm trung bình</dt><dd>{drawdown(summary.avg_drawdown_pct)}</dd></div>
+              <div><dt>Lệnh có tính R</dt><dd>{summary.trades_with_r} / {summary.trades}</dd></div>
+              <div><dt>Trượt giá</dt><dd>chưa đo</dd></div>
             </dl>
             {legacyExcluded > 0 && (
-              <p className="muted">{legacyExcluded} trade{legacyExcluded === 1 ? '' : 's'} opened before M1 have no R and are excluded from every R metric.</p>
+              <p className="muted">{legacyExcluded} lệnh mở trước M1 không có R nên bị loại khỏi mọi chỉ số R.</p>
             )}
             {summary.max_drawdown_pct === null && (
-              <p className="muted">Drawdown needs a live account-equity anchor, which was unavailable at compute time.</p>
+              <p className="muted">Cần số dư tài khoản thực để tính sụt giảm, nhưng lúc tính không lấy được.</p>
             )}
           </Panel>
 
           <BreakdownTable
-            title="Expectancy by setup regime"
-            subtitle="Strategy Selector classification, within the current filter"
+            title="Kỳ vọng theo kiểu thiết lập"
+            subtitle="Phân loại của Strategy Selector, trong bộ lọc hiện tại"
             rows={summary.breakdowns?.by_regime ?? []}
           />
           <BreakdownTable
-            title="Expectancy by volatility regime"
-            subtitle="ATR-relative-to-price bucket at entry, within the current filter"
+            title="Kỳ vọng theo mức biến động"
+            subtitle="Nhóm ATR so với giá lúc vào lệnh, trong bộ lọc hiện tại"
             rows={summary.breakdowns?.by_volatility ?? []}
           />
           <BreakdownTable
-            title="Expectancy by trade-score bucket"
-            subtitle="0–100 setup-quality rubric at entry, within the current filter"
+            title="Kỳ vọng theo nhóm điểm giao dịch"
+            subtitle="Thang điểm chất lượng thiết lập 0–100 lúc vào lệnh, trong bộ lọc hiện tại"
             rows={summary.breakdowns?.by_score_bucket ?? []}
           />
         </>
@@ -991,15 +992,15 @@ function BreakdownTable({ title, subtitle, rows }: { title: string; subtitle: st
   return (
     <Panel title={title} subtitle={subtitle}>
       {rows.length === 0 ? (
-        <EmptyTable text="No closed trades carry this dimension yet." />
+        <EmptyTable text="Chưa có lệnh đã đóng nào có dữ liệu này." />
       ) : (
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Cohort</th><th>Trades</th><th>Win rate</th><th>Expectancy R</th><th>Total R</th><th>P&L</th><th>Profit factor</th></tr></thead>
+            <thead><tr><th>Nhóm</th><th>Số lệnh</th><th>Tỷ lệ thắng</th><th>Kỳ vọng R</th><th>Tổng R</th><th>Lãi/lỗ</th><th>Hệ số lợi nhuận</th></tr></thead>
             <tbody>
               {rows.map((cohort) => (
                 <tr key={cohort.key}>
-                  <td>{cohort.key}</td>
+                  <td>{readable(cohort.key)}</td>
                   <td className="mono">{cohort.trades}</td>
                   <td className="mono">{cohort.win_rate === null ? '—' : percent(cohort.win_rate)}</td>
                   <td className={`mono ${perfToneClass(cohort.expectancy_r)}`}>{rMultiple(cohort.expectancy_r)}</td>
@@ -1022,18 +1023,18 @@ function RiskPage({ apiKey, data, onUpdated, onRefresh }: { apiKey: string; data
   const [message, setMessage] = useState<string | null>(null)
   const [cycleLoading, setCycleLoading] = useState<string | null>(null)
   const fields: { key: keyof RiskConfig; label: string; help: string; suffix?: string }[] = [
-    { key: 'risk_per_trade_pct', label: 'Risk per trade', help: 'Maximum equity risked on one entry', suffix: '%' },
-    { key: 'max_position_pct', label: 'Maximum position', help: 'Cap for any single position', suffix: '%' },
-    { key: 'max_total_exposure_pct', label: 'Total exposure cap', help: 'Maximum combined open exposure', suffix: '%' },
-    { key: 'max_daily_loss_pct', label: 'Daily loss circuit breaker', help: 'Auto-enables the kill switch', suffix: '%' },
-    { key: 'min_confidence', label: 'Minimum LLM confidence', help: 'Lower signals are rejected', suffix: '%' },
-    { key: 'atr_stop_multiplier', label: 'ATR stop multiplier', help: 'Volatility-based stop distance' },
-    { key: 'min_stop_loss_pct', label: 'Minimum stop loss', help: 'Lower bound for every stop', suffix: '%' },
-    { key: 'max_stop_loss_pct', label: 'Maximum stop loss', help: 'Upper bound for every stop', suffix: '%' },
-    { key: 'max_open_positions', label: 'Maximum open positions', help: 'Across both supported pairs' },
-    { key: 'consecutive_loss_limit', label: 'Consecutive loss limit', help: 'Pauses entries after this many losses' },
-    { key: 'cooldown_minutes', label: 'Pair cooldown', help: 'Minutes after a position closes' },
-    { key: 'signal_max_age_minutes', label: 'Maximum signal age', help: 'Minutes before a signal is stale' },
+    { key: 'risk_per_trade_pct', label: 'Rủi ro mỗi lệnh', help: 'Phần tài sản tối đa chịu rủi ro cho một lệnh', suffix: '%' },
+    { key: 'max_position_pct', label: 'Vị thế tối đa', help: 'Giới hạn cho một vị thế', suffix: '%' },
+    { key: 'max_total_exposure_pct', label: 'Tổng vốn sử dụng tối đa', help: 'Tổng vốn tối đa của các vị thế đang mở', suffix: '%' },
+    { key: 'max_daily_loss_pct', label: 'Ngắt khi lỗ trong ngày', help: 'Tự động bật dừng khẩn cấp', suffix: '%' },
+    { key: 'min_confidence', label: 'Độ tin cậy LLM tối thiểu', help: 'Tín hiệu thấp hơn sẽ bị từ chối', suffix: '%' },
+    { key: 'atr_stop_multiplier', label: 'Hệ số cắt lỗ ATR', help: 'Khoảng cắt lỗ theo biến động' },
+    { key: 'min_stop_loss_pct', label: 'Cắt lỗ tối thiểu', help: 'Mức cắt lỗ thấp nhất cho mọi lệnh', suffix: '%' },
+    { key: 'max_stop_loss_pct', label: 'Cắt lỗ tối đa', help: 'Mức cắt lỗ cao nhất cho mọi lệnh', suffix: '%' },
+    { key: 'max_open_positions', label: 'Số vị thế mở tối đa', help: 'Tính trên tất cả các cặp' },
+    { key: 'consecutive_loss_limit', label: 'Giới hạn thua liên tiếp', help: 'Tạm dừng mua sau số lần thua này' },
+    { key: 'cooldown_minutes', label: 'Thời gian chờ mỗi cặp', help: 'Số phút sau khi đóng vị thế' },
+    { key: 'signal_max_age_minutes', label: 'Tuổi tín hiệu tối đa', help: 'Số phút trước khi tín hiệu bị coi là cũ' },
   ]
   const percentageKeys = new Set<keyof RiskConfig>(['risk_per_trade_pct', 'max_position_pct', 'max_total_exposure_pct', 'max_daily_loss_pct', 'min_confidence', 'min_stop_loss_pct', 'max_stop_loss_pct'])
   const save = async () => {
@@ -1043,26 +1044,26 @@ function RiskPage({ apiKey, data, onUpdated, onRefresh }: { apiKey: string; data
       fields.forEach(({ key }) => {
         if (draft[key] !== data.config[key]) Object.assign(patch, { [key]: draft[key] })
       })
-      if (!Object.keys(patch).length) { setMessage('No settings changed.'); return }
+      if (!Object.keys(patch).length) { setMessage('Không có thay đổi nào.'); return }
       const updated = await updateRiskConfig(apiKey, patch)
-      onUpdated(updated); setMessage('Risk settings saved and added to the audit trail.')
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not save risk settings') }
+      onUpdated(updated); setMessage('Đã lưu cấu hình rủi ro và ghi vào nhật ký.')
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Không lưu được cấu hình rủi ro') }
     finally { setSaving(false) }
   }
   const runCycle = async (symbol: string) => {
     setCycleLoading(symbol); setMessage(null)
     try {
       const result = await triggerCycle(apiKey, symbol)
-      setMessage(result.skipped ? `${symbol} cycle was already running or processed.` : `${symbol} cycle started. Trace ${result.trace_id?.slice(0, 8)}…`)
+      setMessage(result.skipped ? `Chu kỳ ${symbol} đang chạy hoặc đã xử lý rồi.` : `Đã chạy chu kỳ ${symbol}. Trace ${result.trace_id?.slice(0, 8)}…`)
       window.setTimeout(onRefresh, 1500)
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not trigger cycle') }
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Không chạy được chu kỳ') }
     finally { setCycleLoading(null) }
   }
   return (
     <div className="risk-layout">
       <div className="page-stack">
-        <section className="section-intro"><div><h2>Deterministic risk limits</h2><p>These values govern the Risk Engine. Changes are persisted and audited immediately.</p></div><span className="safety-chip"><ShieldCheck size={16} /> Kill switch remains the first gate</span></section>
-        <Panel title="Entry and portfolio limits" subtitle="Percentage fields are shown as human-readable percentages">
+        <section className="section-intro"><div><h2>Giới hạn rủi ro</h2><p>Các giá trị này điều khiển bộ kiểm soát rủi ro. Thay đổi được lưu và ghi nhật ký ngay.</p></div><span className="safety-chip"><ShieldCheck size={16} /> Dừng khẩn cấp luôn là chốt chặn đầu tiên</span></section>
+        <Panel title="Giới hạn vào lệnh và danh mục" subtitle="Các trường phần trăm được hiển thị dạng %">
           <div className="settings-grid">
             {fields.map((field) => {
               const raw = draft[field.key]
@@ -1073,15 +1074,15 @@ function RiskPage({ apiKey, data, onUpdated, onRefresh }: { apiKey: string; data
               }} />{field.suffix && <b>{field.suffix}</b>}</div></label>
             })}
           </div>
-          <div className="settings-footer">{message && <span className="save-message">{message}</span>}<button className="button primary" onClick={() => void save()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Save risk settings</button></div>
+          <div className="settings-footer">{message && <span className="save-message">{message}</span>}<button className="button primary" onClick={() => void save()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Lưu cấu hình rủi ro</button></div>
         </Panel>
       </div>
       <aside className="risk-aside">
-        <Panel title="Safety invariants"><ul className="check-list"><li><Check /> Every signal passes Risk Engine</li><li><Check /> Position size is deterministic</li><li><Check /> Every approved entry has a stop</li><li><Check /> Failures default to HOLD</li><li><Check /> Changes create audit events</li></ul></Panel>
-        <Panel title="Manual analysis cycle" subtitle="Debug only; normal risk rules still apply">
-          <div className="cycle-buttons">{Object.keys(data.status.pairs).map((symbol) => <button className="button secondary" key={symbol} onClick={() => void runCycle(symbol)} disabled={Boolean(cycleLoading)}>{cycleLoading === symbol ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />} Analyze {symbol}</button>)}</div>
+        <Panel title="Nguyên tắc an toàn"><ul className="check-list"><li><Check /> Mọi tín hiệu đều qua kiểm soát rủi ro</li><li><Check /> Khối lượng lệnh được tính cố định theo quy tắc</li><li><Check /> Mọi lệnh được duyệt đều có cắt lỗ</li><li><Check /> Lỗi thì mặc định là GIỮ</li><li><Check /> Mọi thay đổi đều được ghi nhật ký</li></ul></Panel>
+        <Panel title="Chạy phân tích thủ công" subtitle="Chỉ để kiểm tra; quy tắc rủi ro vẫn áp dụng">
+          <div className="cycle-buttons">{Object.keys(data.status.pairs).map((symbol) => <button className="button secondary" key={symbol} onClick={() => void runCycle(symbol)} disabled={Boolean(cycleLoading)}>{cycleLoading === symbol ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />} Phân tích {symbol}</button>)}</div>
         </Panel>
-        <div className="warning-card"><AlertTriangle size={20} /><div><strong>Dry-run cannot be changed here</strong><p>Switching to live funds requires an explicit deployment-level human review. This console does not expose that path.</p></div></div>
+        <div className="warning-card"><AlertTriangle size={20} /><div><strong>Không thể đổi chế độ chạy thử ở đây</strong><p>Chuyển sang tiền thật cần người kiểm tra ở cấp triển khai. Bảng điều khiển này không cho phép làm việc đó.</p></div></div>
       </aside>
     </div>
   )
@@ -1098,53 +1099,53 @@ function LLMConfigPage({ apiKey, data, onUpdated }: { apiKey: string; data: Dash
       ;(Object.keys(draft) as (keyof LLMConfig)[]).forEach((key) => {
         if (draft[key] !== data.llmConfig[key]) Object.assign(patch, { [key]: draft[key] })
       })
-      if (!Object.keys(patch).length) { setMessage('No settings changed.'); return }
+      if (!Object.keys(patch).length) { setMessage('Không có thay đổi nào.'); return }
       const updated = await updateLLMConfig(apiKey, patch)
-      onUpdated(updated); setMessage('LLM settings saved and added to the audit trail.')
-    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Could not save LLM settings') }
+      onUpdated(updated); setMessage('Đã lưu cấu hình LLM và ghi vào nhật ký.')
+    } catch (caught) { setMessage(caught instanceof Error ? caught.message : 'Không lưu được cấu hình LLM') }
     finally { setSaving(false) }
   }
   return (
     <div className="risk-layout">
       <div className="page-stack">
         <section className="section-intro">
-          <div><h2>LLM decision engine</h2><p>Controls which model classifies each signal as BUY, SELL, or HOLD. Changes are persisted and audited immediately.</p></div>
-          <span className="safety-chip"><ShieldCheck size={16} /> Risk Engine still governs every trade</span>
+          <div><h2>Bộ phân tích LLM</h2><p>Chọn mô hình dùng để phân loại tín hiệu MUA, BÁN hoặc GIỮ. Thay đổi được lưu và ghi nhật ký ngay.</p></div>
+          <span className="safety-chip"><ShieldCheck size={16} /> Mọi giao dịch vẫn qua kiểm soát rủi ro</span>
         </section>
-        <Panel title="Provider and model" subtitle="Applies on the Scheduler's next cycle — no service restart required">
+        <Panel title="Nhà cung cấp và mô hình" subtitle="Áp dụng từ chu kỳ tiếp theo — không cần khởi động lại">
           <div className="settings-grid">
             <label className="setting-field">
-              <span>Provider</span>
-              <small>Which LLM backend analyzes each candle</small>
+              <span>Nhà cung cấp</span>
+              <small>Dịch vụ LLM dùng để phân tích từng nến</small>
               <div>
                 <select value={draft.llm_provider} onChange={(event) => setDraft({ ...draft, llm_provider: event.target.value as LLMConfig['llm_provider'] })}>
-                  <option value="anthropic">Anthropic (hosted)</option>
-                  <option value="ollama">Ollama (self-hosted)</option>
+                  <option value="anthropic">Anthropic (dịch vụ đám mây)</option>
+                  <option value="ollama">Ollama (tự chạy)</option>
                 </select>
               </div>
             </label>
             <label className="setting-field">
-              <span>Anthropic model</span>
-              <small>Used only when provider is Anthropic</small>
+              <span>Mô hình Anthropic</span>
+              <small>Chỉ dùng khi nhà cung cấp là Anthropic</small>
               <div><input type="text" value={draft.anthropic_model} onChange={(event) => setDraft({ ...draft, anthropic_model: event.target.value })} /></div>
             </label>
             <label className="setting-field">
-              <span>Ollama model</span>
-              <small>Used only when provider is Ollama</small>
+              <span>Mô hình Ollama</span>
+              <small>Chỉ dùng khi nhà cung cấp là Ollama</small>
               <div><input type="text" value={draft.ollama_model} onChange={(event) => setDraft({ ...draft, ollama_model: event.target.value })} /></div>
             </label>
             <label className="setting-field">
-              <span>Ollama temperature</span>
-              <small>Higher values reduce repetitive/boilerplate answers</small>
+              <span>Nhiệt độ Ollama</span>
+              <small>Giá trị cao hơn giúp câu trả lời ít lặp lại hơn</small>
               <div><input type="number" min="0" max="2" step="0.1" value={draft.ollama_temperature} onChange={(event) => setDraft({ ...draft, ollama_temperature: Number(event.target.value) })} /></div>
             </label>
           </div>
-          <div className="settings-footer">{message && <span className="save-message">{message}</span>}<button className="button primary" onClick={() => void save()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Save LLM settings</button></div>
+          <div className="settings-footer">{message && <span className="save-message">{message}</span>}<button className="button primary" onClick={() => void save()} disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Lưu cấu hình LLM</button></div>
         </Panel>
       </div>
       <aside className="risk-aside">
-        <Panel title="Safety invariants"><ul className="check-list"><li><Check /> LLM output has no sizing field</li><li><Check /> Failures default to HOLD</li><li><Check /> Every signal still passes Risk Engine</li><li><Check /> Changes create audit events</li></ul></Panel>
-        <div className="warning-card"><AlertTriangle size={20} /><div><strong>The LLM never sees account data</strong><p>Balance, API keys, and position size are excluded from every request by design — switching provider or model here cannot grant execution access.</p></div></div>
+        <Panel title="Nguyên tắc an toàn"><ul className="check-list"><li><Check /> LLM không được quyết định khối lượng lệnh</li><li><Check /> Lỗi thì mặc định là GIỮ</li><li><Check /> Mọi tín hiệu vẫn qua kiểm soát rủi ro</li><li><Check /> Mọi thay đổi đều được ghi nhật ký</li></ul></Panel>
+        <div className="warning-card"><AlertTriangle size={20} /><div><strong>LLM không bao giờ thấy dữ liệu tài khoản</strong><p>Số dư, API key và khối lượng lệnh luôn bị loại khỏi mọi yêu cầu — đổi nhà cung cấp hay mô hình ở đây cũng không thể cho LLM quyền đặt lệnh.</p></div></div>
       </aside>
     </div>
   )
@@ -1158,9 +1159,9 @@ function KillSwitchDialog({ apiKey, currentlyEnabled, onClose, onChanged }: { ap
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (!reason.trim()) return; setSaving(true)
     try { await setKillSwitch(apiKey, enable, reason.trim()); onChanged() }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not change kill switch'); setSaving(false) }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Không đổi được trạng thái dừng khẩn cấp'); setSaving(false) }
   }
-  return <div className="modal-layer" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="kill-title"><button className="modal-close" onClick={onClose}><X size={19} /></button><div className={`modal-icon ${enable ? 'danger' : 'safe'}`}>{enable ? <Octagon /> : <Play />}</div><h2 id="kill-title">{enable ? 'Stop all new trading?' : 'Resume normal operation?'}</h2><p>{enable ? 'The global kill switch will immediately reject every new entry. Existing positions remain managed by Freqtrade safety rules.' : 'New signals will once again be eligible for deterministic risk evaluation. This does not guarantee an order.'}</p><form onSubmit={submit}><label htmlFor="reason">Reason for audit trail</label><textarea id="reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={enable ? 'e.g. Reviewing unexpected market volatility' : 'e.g. Review complete, controls verified'} autoFocus maxLength={500} />{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="button ghost" onClick={onClose}>Cancel</button><button type="submit" className={`button ${enable ? 'danger' : 'resume'}`} disabled={!reason.trim() || saving}>{saving && <LoaderCircle className="spin" size={17} />}{enable ? 'Enable kill switch' : 'Resume risk evaluation'}</button></div></form></div></div>
+  return <div className="modal-layer" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="kill-title"><button className="modal-close" onClick={onClose}><X size={19} /></button><div className={`modal-icon ${enable ? 'danger' : 'safe'}`}>{enable ? <Octagon /> : <Play />}</div><h2 id="kill-title">{enable ? 'Dừng mọi giao dịch mới?' : 'Tiếp tục hoạt động bình thường?'}</h2><p>{enable ? 'Công tắc dừng khẩn cấp sẽ lập tức từ chối mọi lệnh mua mới. Các vị thế đang mở vẫn được Freqtrade quản lý theo quy tắc an toàn.' : 'Tín hiệu mới sẽ lại được đưa vào đánh giá rủi ro. Điều này không đảm bảo sẽ có lệnh.'}</p><form onSubmit={submit}><label htmlFor="reason">Lý do (ghi vào nhật ký)</label><textarea id="reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder={enable ? 'VD: Đang xem xét biến động thị trường bất thường' : 'VD: Đã kiểm tra xong, mọi thứ ổn'} autoFocus maxLength={500} />{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="button ghost" onClick={onClose}>Hủy</button><button type="submit" className={`button ${enable ? 'danger' : 'resume'}`} disabled={!reason.trim() || saving}>{saving && <LoaderCircle className="spin" size={17} />}{enable ? 'Bật dừng khẩn cấp' : 'Tiếp tục giao dịch'}</button></div></form></div></div>
 }
 
 function DetailDrawer({ apiKey, detail, onClose }: { apiKey: string; detail: Exclude<Detail, null>; onClose: () => void }) {
@@ -1170,11 +1171,11 @@ function DetailDrawer({ apiKey, detail, onClose }: { apiKey: string; detail: Exc
   useEffect(() => {
     let active = true
     const promise = detail.kind === 'signal' ? getSignal(apiKey, detail.id) : getAudit(apiKey, detail.id)
-    promise.then((value) => { if (!active) return; if (detail.kind === 'signal') setSignal(value as Signal); else setTimeline(value as AuditTimeline) }).catch((caught) => active && setError(caught instanceof Error ? caught.message : 'Could not load detail'))
+    promise.then((value) => { if (!active) return; if (detail.kind === 'signal') setSignal(value as Signal); else setTimeline(value as AuditTimeline) }).catch((caught) => active && setError(caught instanceof Error ? caught.message : 'Không tải được chi tiết'))
     return () => { active = false }
   }, [apiKey, detail])
   const events = timeline ? buildTimeline(timeline) : []
-  return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose} aria-label="Close details" /><aside className="drawer"><header><div><span className="eyebrow">{detail.kind === 'signal' ? 'SIGNAL DETAIL' : 'AUDIT TIMELINE'}</span><h2>{detail.kind === 'signal' ? 'Raw model response' : `Trace ${shortId(detail.id)}`}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></header><div className="drawer-body">{error && <div className="form-error">{error}</div>}{!signal && !timeline && !error && <div className="drawer-loading"><LoaderCircle className="spin" /> Loading detail…</div>}{signal && <><div className="detail-hero"><Coin symbol={signal.symbol} /><div><strong>{signal.symbol} · {signal.timeframe}</strong><span>{dateTime(signal.created_at)}</span></div><ActionBadge action={signal.action} large /></div><dl className="detail-list"><div><dt>Confidence</dt><dd>{Math.round(Number(signal.confidence) * 100)}%</dd></div><div><dt>Price</dt><dd>{money(signal.price)}</dd></div><div><dt>ATR (14)</dt><dd>{money(signal.atr_14)}</dd></div><div><dt>Status</dt><dd>{readable(signal.status)}</dd></div><div><dt>Model</dt><dd>{signal.model_name}</dd></div><div><dt>Trace ID</dt><dd className="mono">{signal.trace_id}</dd></div></dl><h3>Validated reasoning</h3><div className="reason-box">{signal.reasoning}</div><ModelInputSection input={signal.model_input} /><h3>Raw provider response</h3><pre>{JSON.stringify(signal.raw_response, null, 2)}</pre></>}{timeline && <>{events.length ? <div className="timeline">{events.map((event, index) => <div className="timeline-item" key={`${event.type}-${index}`}><div className={`timeline-marker ${event.tone}`}>{event.icon}</div><div><span>{dateTime(event.at)}</span><strong>{event.title}</strong><p>{event.detail}</p>{event.payload && <details><summary>Event payload</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></div>)}</div> : <EmptyState icon={<Clock3 />} title="No events for this trace" text="The audit timeline is currently empty." />}</>}</div></aside></div>
+  return <div className="drawer-layer"><button className="drawer-scrim" onClick={onClose} aria-label="Đóng chi tiết" /><aside className="drawer"><header><div><span className="eyebrow">{detail.kind === 'signal' ? 'CHI TIẾT TÍN HIỆU' : 'DÒNG THỜI GIAN'}</span><h2>{detail.kind === 'signal' ? 'Phản hồi gốc của mô hình' : `Trace ${shortId(detail.id)}`}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></header><div className="drawer-body">{error && <div className="form-error">{error}</div>}{!signal && !timeline && !error && <div className="drawer-loading"><LoaderCircle className="spin" /> Đang tải chi tiết…</div>}{signal && <><div className="detail-hero"><Coin symbol={signal.symbol} /><div><strong>{signal.symbol} · {signal.timeframe}</strong><span>{dateTime(signal.created_at)}</span></div><ActionBadge action={signal.action} large /></div><dl className="detail-list"><div><dt>Độ tin cậy</dt><dd>{Math.round(Number(signal.confidence) * 100)}%</dd></div><div><dt>Giá</dt><dd>{money(signal.price)}</dd></div><div><dt>ATR (14)</dt><dd>{money(signal.atr_14)}</dd></div><div><dt>Trạng thái</dt><dd>{readable(signal.status)}</dd></div><div><dt>Mô hình</dt><dd>{signal.model_name}</dd></div><div><dt>Trace ID</dt><dd className="mono">{signal.trace_id}</dd></div></dl><h3>Lập luận (đã kiểm tra)</h3><div className="reason-box">{signal.reasoning}</div><ModelInputSection input={signal.model_input} /><h3>Phản hồi gốc từ nhà cung cấp</h3><pre>{JSON.stringify(signal.raw_response, null, 2)}</pre></>}{timeline && <>{events.length ? <div className="timeline">{events.map((event, index) => <div className="timeline-item" key={`${event.type}-${index}`}><div className={`timeline-marker ${event.tone}`}>{event.icon}</div><div><span>{dateTime(event.at)}</span><strong>{event.title}</strong><p>{event.detail}</p>{event.payload && <details><summary>Dữ liệu sự kiện</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></div>)}</div> : <EmptyState icon={<Clock3 />} title="Không có sự kiện nào" text="Dòng thời gian hiện đang trống." />}</>}</div></aside></div>
 }
 
 interface ModelInputShape {
@@ -1192,38 +1193,38 @@ interface ModelInputShape {
 }
 
 function ModelInputSection({ input }: { input?: Record<string, unknown> | null }) {
-  if (!input) return <><h3>Model input</h3><p className="muted">Not captured for this signal.</p></>
+  if (!input) return <><h3>Dữ liệu đầu vào mô hình</h3><p className="muted">Không lưu cho tín hiệu này.</p></>
   const { indicators, sentiment, position_context: position, ohlcv } = input as ModelInputShape
   return (
     <>
-      <h3>Model input</h3>
+      <h3>Dữ liệu đầu vào mô hình</h3>
       <dl className="detail-list">
         <div><dt>RSI (14)</dt><dd>{indicators?.rsi_14?.toFixed(1) ?? '—'}</dd></div>
         <div><dt>EMA 50</dt><dd>{indicators?.ema_50 !== undefined ? money(indicators.ema_50) : '—'}</dd></div>
         <div><dt>EMA 200</dt><dd>{indicators?.ema_200 !== undefined ? money(indicators.ema_200) : '—'}</dd></div>
         <div><dt>MACD histogram</dt><dd>{indicators?.macd?.histogram?.toFixed(2) ?? '—'}</dd></div>
         <div><dt>ATR (14)</dt><dd>{indicators?.atr_14 !== undefined ? money(indicators.atr_14) : '—'}</dd></div>
-        <div><dt>Volume SMA (20)</dt><dd>{indicators?.volume_sma_20?.toFixed(2) ?? '—'}</dd></div>
-        <div><dt>Sentiment</dt><dd>{sentiment ? `${readable(sentiment.state ?? null)} (${sentiment.score})` : '—'}</dd></div>
-        <div><dt>Open position</dt><dd>{position?.has_open_position ? 'Yes' : 'No'}</dd></div>
+        <div><dt>SMA khối lượng (20)</dt><dd>{indicators?.volume_sma_20?.toFixed(2) ?? '—'}</dd></div>
+        <div><dt>Tâm lý thị trường</dt><dd>{sentiment ? `${readable(sentiment.state ?? null)} (${sentiment.score})` : '—'}</dd></div>
+        <div><dt>Đang có vị thế</dt><dd>{position?.has_open_position ? 'Có' : 'Không'}</dd></div>
       </dl>
-      <details><summary>Full input payload ({ohlcv?.length ?? 0} candles)</summary><pre>{JSON.stringify(input, null, 2)}</pre></details>
+      <details><summary>Toàn bộ dữ liệu đầu vào ({ohlcv?.length ?? 0} nến)</summary><pre>{JSON.stringify(input, null, 2)}</pre></details>
     </>
   )
 }
 
 function buildTimeline(timeline: AuditTimeline) {
   const rows: { at: string; type: string; title: string; detail: string; tone: string; icon: ReactNode; payload?: Record<string, unknown> }[] = []
-  timeline.signals.forEach((signal) => rows.push({ at: signal.created_at, type: 'signal', title: `${signal.action} signal received`, detail: `${Math.round(Number(signal.confidence) * 100)}% confidence · ${signal.symbol}`, tone: 'info', icon: <Bot size={15} /> }))
-  timeline.risk_decisions.forEach((decision) => rows.push({ at: decision.created_at, type: 'decision', title: decision.approved ? 'Risk approved' : 'Risk did not approve', detail: decision.approved ? `${money(decision.position_size_usdt)} position · stop ${money(decision.stop_loss_price)}` : readable(decision.rejection_reason), tone: decision.approved ? 'success' : 'neutral', icon: decision.approved ? <Check size={15} /> : <X size={15} /> }))
-  timeline.orders.forEach((order) => rows.push({ at: order.updated_at, type: 'order', title: `Order ${readable(order.status)}`, detail: `${order.symbol} · ${compactNumber(order.filled_amount ?? order.requested_amount)} base units`, tone: order.status === 'FAILED' ? 'danger' : 'success', icon: <ClipboardList size={15} /> }))
-  timeline.audit_events.forEach((event) => rows.push({ at: event.created_at, type: event.event_type, title: readable(event.event_type), detail: 'Immutable audit event', tone: event.event_type.includes('FAILED') ? 'danger' : 'info', icon: <Activity size={15} />, payload: event.payload }))
+  timeline.signals.forEach((signal) => rows.push({ at: signal.created_at, type: 'signal', title: `Nhận tín hiệu ${readable(signal.action)}`, detail: `Độ tin cậy ${Math.round(Number(signal.confidence) * 100)}% · ${signal.symbol}`, tone: 'info', icon: <Bot size={15} /> }))
+  timeline.risk_decisions.forEach((decision) => rows.push({ at: decision.created_at, type: 'decision', title: decision.approved ? 'Rủi ro: được duyệt' : 'Rủi ro: không duyệt', detail: decision.approved ? `Vị thế ${money(decision.position_size_usdt)} · cắt lỗ ${money(decision.stop_loss_price)}` : readable(decision.rejection_reason), tone: decision.approved ? 'success' : 'neutral', icon: decision.approved ? <Check size={15} /> : <X size={15} /> }))
+  timeline.orders.forEach((order) => rows.push({ at: order.updated_at, type: 'order', title: `Lệnh: ${readable(order.status)}`, detail: `${order.symbol} · ${compactNumber(order.filled_amount ?? order.requested_amount)} đơn vị coin`, tone: order.status === 'FAILED' ? 'danger' : 'success', icon: <ClipboardList size={15} /> }))
+  timeline.audit_events.forEach((event) => rows.push({ at: event.created_at, type: event.event_type, title: readable(event.event_type), detail: 'Sự kiện nhật ký (không thể sửa)', tone: event.event_type.includes('FAILED') ? 'danger' : 'info', icon: <Activity size={15} />, payload: event.payload }))
   return rows.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
 }
 
 function buildPnlChart(positions: Position[]) {
   let running = 0
-  return [...positions].sort((a, b) => new Date(a.closed_at ?? 0).getTime() - new Date(b.closed_at ?? 0).getTime()).map((position) => { running += Number(position.pnl_usdt ?? 0); return { label: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(position.closed_at!)), pnl: Number(running.toFixed(2)) } })
+  return [...positions].sort((a, b) => new Date(a.closed_at ?? 0).getTime() - new Date(b.closed_at ?? 0).getTime()).map((position) => { running += Number(position.pnl_usdt ?? 0); return { label: new Intl.DateTimeFormat('vi-VN', { month: 'short', day: 'numeric' }).format(new Date(position.closed_at!)), pnl: Number(running.toFixed(2)) } })
 }
 
 function Panel({ title, subtitle, action, children, className = '' }: { title?: string; subtitle?: string; action?: ReactNode; children?: ReactNode; className?: string }) {
@@ -1242,12 +1243,12 @@ function Coin({ symbol, small = false }: { symbol: string; small?: boolean }) {
 }
 
 function ActionBadge({ action, large = false }: { action: Action | null; large?: boolean }) {
-  return <span className={`badge action ${(action ?? 'NONE').toLowerCase()} ${large ? 'large' : ''}`}>{action ?? '—'}</span>
+  return <span className={`badge action ${(action ?? 'NONE').toLowerCase()} ${large ? 'large' : ''}`}>{action ? readable(action) : '—'}</span>
 }
 
 function DecisionBadge({ decision, large = false }: { decision?: Decision; large?: boolean }) {
-  if (!decision) return <span className={`badge pending ${large ? 'large' : ''}`}><Clock3 size={12} /> Pending</span>
-  return <span className={`badge ${decision.approved ? 'approved' : 'rejected'} ${large ? 'large' : ''}`}>{decision.approved ? <Check size={12} /> : <X size={12} />}{decision.approved ? 'Approved' : readable(decision.rejection_reason)}</span>
+  if (!decision) return <span className={`badge pending ${large ? 'large' : ''}`}><Clock3 size={12} /> Đang chờ</span>
+  return <span className={`badge ${decision.approved ? 'approved' : 'rejected'} ${large ? 'large' : ''}`}>{decision.approved ? <Check size={12} /> : <X size={12} />}{decision.approved ? 'Được duyệt' : readable(decision.rejection_reason)}</span>
 }
 
 function OrderBadge({ status }: { status: Order['status'] }) {
@@ -1259,7 +1260,7 @@ function Confidence({ value }: { value: number }) {
 }
 
 function Filter({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[] }) {
-  return <label className="filter"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select></label>
+  return <label className="filter"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{viLabel(option) ?? option}</option>)}</select></label>
 }
 
 function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {

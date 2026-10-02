@@ -28,17 +28,17 @@ describe('Operator authentication', () => {
     })
     render(<App />)
 
-    await user.type(screen.getByLabelText('Admin API key'), 'operator-secret')
-    await user.click(screen.getByRole('button', { name: /connect securely/i }))
+    await user.type(screen.getByLabelText('API key quản trị'), 'operator-secret')
+    await user.click(screen.getByRole('button', { name: /kết nối an toàn/i }))
 
     expect(sessionStorage.getItem('trademind_api_key')).toBe('operator-secret')
-    expect(await screen.findByText('Portfolio equity')).toBeInTheDocument()
+    expect(await screen.findByText('Tổng tài sản')).toBeInTheDocument()
     expect(screen.getByText('$5,000.00')).toBeInTheDocument()
   })
 
   it('does not allow an empty API key', async () => {
     render(<App />)
-    expect(screen.getByRole('button', { name: /connect securely/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /kết nối an toàn/i })).toBeDisabled()
   })
 })
 
@@ -80,21 +80,22 @@ describe('Performance view', () => {
       return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     render(<App />)
-    await user.type(screen.getByLabelText('Admin API key'), 'operator-secret')
-    await user.click(screen.getByRole('button', { name: /connect securely/i }))
-    await screen.findByText('Portfolio equity')
+    await user.type(screen.getByLabelText('API key quản trị'), 'operator-secret')
+    await user.click(screen.getByRole('button', { name: /kết nối an toàn/i }))
+    await screen.findByText('Tổng tài sản')
 
-    await user.click(screen.getByRole('button', { name: /performance/i }))
+    await user.click(screen.getByRole('button', { name: /hiệu quả/i }))
 
-    expect(await screen.findByText('Expectancy (R / trade)')).toBeInTheDocument()
+    expect(await screen.findByText('Kỳ vọng (R / lệnh)')).toBeInTheDocument()
     expect(screen.getByText('+0.34R')).toBeInTheDocument()
-    expect(screen.getByText('7W · 4L · 1BE')).toBeInTheDocument()
+    expect(screen.getByText('7 thắng · 4 thua · 1 hòa')).toBeInTheDocument()
 
     // M4 breakdown table renders its cohort rows
-    expect(screen.getByText('Expectancy by setup regime')).toBeInTheDocument()
+    expect(screen.getByText('Kỳ vọng theo kiểu thiết lập')).toBeInTheDocument()
     expect(screen.getByText('+0.42R')).toBeInTheDocument()
-    // 'trend_pullback' now appears both as a filter option and a cohort row
-    expect(screen.getAllByText('trend_pullback').length).toBeGreaterThan(1)
+    // the 'trend_pullback' code renders with its Vietnamese label both as a
+    // filter option and as a cohort row
+    expect(screen.getAllByText('Hồi trong xu hướng').length).toBeGreaterThan(1)
   })
 })
 
@@ -160,23 +161,23 @@ describe('Trades view', () => {
     const user = userEvent.setup()
     mockDashboard()
     render(<App />)
-    await user.type(screen.getByLabelText('Admin API key'), 'operator-secret')
-    await user.click(screen.getByRole('button', { name: /connect securely/i }))
-    await screen.findByText('Portfolio equity')
-    await user.click(screen.getByRole('button', { name: /^trades$/i }))
+    await user.type(screen.getByLabelText('API key quản trị'), 'operator-secret')
+    await user.click(screen.getByRole('button', { name: /kết nối an toàn/i }))
+    await screen.findByText('Tổng tài sản')
+    await user.click(screen.getByRole('button', { name: /^giao dịch$/i }))
     return user
   }
 
   it('consolidates each position into one row with its joined setup, score and outcome', async () => {
     await openTrades()
 
-    expect(await screen.findByText('Trade ledger')).toBeInTheDocument()
+    expect(await screen.findByText('Sổ giao dịch')).toBeInTheDocument()
     // one row per position — the exit reason, R multiple and setup regime all
     // resolve onto that single record
-    expect(screen.getByText('Take Profit')).toBeInTheDocument()
+    expect(screen.getByText('Chốt lời')).toBeInTheDocument()
     expect(screen.getByText('+1.50R')).toBeInTheDocument()
-    expect(screen.getByText('Trend Pullback')).toBeInTheDocument()
-    expect(screen.getByText('1 trade')).toBeInTheDocument()
+    expect(screen.getAllByText('Hồi trong xu hướng').length).toBeGreaterThan(0)
+    expect(screen.getByText('1 giao dịch')).toBeInTheDocument()
 
     // Orders is no longer a top-level tab
     expect(screen.queryByRole('button', { name: /^orders$/i })).not.toBeInTheDocument()
@@ -185,14 +186,14 @@ describe('Trades view', () => {
 
   it('opens a lifecycle detail drawer when a trade row is clicked', async () => {
     const user = await openTrades()
-    await screen.findByText('Trade ledger')
+    await screen.findByText('Sổ giao dịch')
 
-    await user.click(screen.getByText('Take Profit'))
+    await user.click(screen.getByText('Chốt lời'))
 
-    expect(await screen.findByText('TRADE DETAIL')).toBeInTheDocument()
-    expect(screen.getByText('Actual risk (1R)')).toBeInTheDocument()
+    expect(await screen.findByText('CHI TIẾT GIAO DỊCH')).toBeInTheDocument()
+    expect(screen.getByText('Rủi ro thực tế (1R)')).toBeInTheDocument()
     expect(screen.getByText('$13.30')).toBeInTheDocument()
-    expect(screen.getByText('Trend Alignment')).toBeInTheDocument()
+    expect(screen.getByText('Đồng thuận xu hướng')).toBeInTheDocument()
     expect(screen.getByText('Clean trend pullback into the 50 EMA.')).toBeInTheDocument()
   })
 })
