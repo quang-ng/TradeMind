@@ -41,43 +41,107 @@ _NOTIFY_EVENT_TYPES = frozenset(
     }
 )
 
+# Freqtrade exit tags -> short Vietnamese label for the SELL message.
+# Unknown tags are shown as-is.
+_EXIT_REASON_LABELS = {
+    "roi": "Chốt lời (ROI)",
+    "minimal_roi": "Chốt lời (ROI)",
+    "stop_loss": "Cắt lỗ",
+    "stoploss": "Cắt lỗ",
+    "atr_stoploss": "Cắt lỗ ATR",
+    "stoploss_on_exchange": "Cắt lỗ trên sàn",
+    "trailing_stop_loss": "Cắt lỗ đuổi",
+    "exit_signal": "Tín hiệu bán",
+    "force_exit": "Bán thủ công",
+    "force_sell": "Bán thủ công",
+    "emergency_exit": "Bán khẩn cấp",
+}
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except ArithmeticError:
+        return None
+
+
+def _plain_number(value: Decimal) -> str:
+    """`Decimal` without exponent or trailing zeros (50000.00000000 -> 50000)."""
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
 
 def _format_event(event: AuditEvent) -> str:
-    """One human-readable line for each notifiable audit event type
-    (buy/sell + safety alerts, see `_NOTIFY_EVENT_TYPES`)."""
+    """Short, operator-friendly Telegram text for each notifiable audit event
+    type (buy/sell + safety alerts, see `_NOTIFY_EVENT_TYPES`). Fields the
+    payload doesn't carry (e.g. reconciliation-sourced events have no entry
+    price) are left out rather than printed as "None"."""
     p = event.payload or {}
     et = event.event_type
+    pair = p.get("pair") or p.get("symbol") or "?"
+
     if et == AuditEventType.POSITION_OPENED.value:
-        text = (
-            f"BUY: {p.get('pair')} @ {p.get('entry_price')} "
-            f"(amount {p.get('amount')})"
+        lines = [f"🟢 MUA {pair}"]
+        price = _to_decimal(p.get("entry_price"))
+        amount = _to_decimal(p.get("amount"))
+        if price is not None:
+            lines.append(f"Giá: {_plain_number(price)}")
+        if amount is not None:
+            value = f" (≈{price * amount:.2f} USDT)" if price is not None else ""
+            lines.append(f"Số lượng: {_plain_number(amount)}{value}")
+        return "\n".join(lines)
+
+    if et == AuditEventType.POSITION_CLOSED.value:
+        pnl = _to_decimal(p.get("pnl_usdt"))
+        icon = "✅" if pnl is not None and pnl > 0 else "🔴" if pnl is not None and pnl < 0 else "⚪"
+        lines = [f"{icon} BÁN {pair}"]
+        if pnl is not None:
+            word = "Lãi" if pnl > 0 else "Lỗ" if pnl < 0 else "Hòa vốn"
+            r_multiple = _to_decimal(p.get("r_multiple"))
+            r_text = f" ({r_multiple:+.2f}R)" if r_multiple is not None else ""
+            lines.append(f"{word}: {pnl:+.2f} USDT{r_text}")
+        exit_reason = p.get("exit_reason")
+        if exit_reason:
+            lines.append(f"Lý do: {_EXIT_REASON_LABELS.get(exit_reason, exit_reason)}")
+        fees = _to_decimal(p.get("fees_usdt"))
+        if fees is not None:
+            lines.append(f"Phí: {fees:.2f} USDT")
+        return "\n".join(lines)
+
+    if et == AuditEventType.KILLSWITCH_ENABLED.value:
+        return (
+            "⛔ ĐÃ DỪNG GIAO DỊCH (dừng khẩn cấp)\n"
+            f"Người bật: {p.get('updated_by')}\n"
+            f"Lý do: {p.get('reason')}"
         )
-    elif et == AuditEventType.POSITION_CLOSED.value:
-        text = f"SELL: {p.get('pair')} pnl_usdt={p.get('pnl_usdt')}"
-    elif et == AuditEventType.KILLSWITCH_ENABLED.value:
-        text = f"KILL SWITCH ENABLED by {p.get('updated_by')}: {p.get('reason')}"
-    elif et == AuditEventType.KILLSWITCH_DISABLED.value:
-        text = f"Kill switch disabled by {p.get('updated_by')}: {p.get('reason')}"
-    elif et == AuditEventType.RECONCILIATION_REQUIRED.value:
-        text = (
-            f"OPERATOR ACTION REQUIRED: stale order {p.get('order_id')} "
-            f"for {p.get('symbol')} could not be reconciled ({p.get('reason')})"
+
+    if et == AuditEventType.KILLSWITCH_DISABLED.value:
+        return (
+            "▶️ Đã mở lại giao dịch\n"
+            f"Người tắt: {p.get('updated_by')}\n"
+            f"Lý do: {p.get('reason')}"
         )
-    elif et == AuditEventType.LLM_TIMEOUT_STREAK.value:
-        text = (
-            f"LLM ANALYSIS STALLED: {p.get('streak')} consecutive /analyze cycles "
-            f"produced no signal (latest: {p.get('reason')} on {p.get('symbol')}). "
-            "No new trades can be opened until it recovers — check the LLM service "
-            "and the Ollama host."
+
+    if et == AuditEventType.RECONCILIATION_REQUIRED.value:
+        return (
+            f"⚠️ CẦN XỬ LÝ: lệnh {pair} bị treo, không đối soát được\n"
+            f"Lý do: {p.get('reason')}\n"
+            f"Mã lệnh: {p.get('order_id')}"
         )
-    elif et == AuditEventType.LLM_TIMEOUT_RECOVERED.value:
-        text = (
-            f"LLM analysis recovered — a /analyze cycle produced a signal again "
-            f"after {p.get('recovered_after')} consecutive failures."
+
+    if et == AuditEventType.LLM_TIMEOUT_STREAK.value:
+        return (
+            f"⚠️ LLM KHÔNG PHẢN HỒI: {p.get('streak')} lần liên tiếp không ra tín hiệu "
+            f"(lỗi gần nhất: {p.get('reason')}, {p.get('symbol')})\n"
+            "Chưa thể mở lệnh mới — kiểm tra dịch vụ LLM."
         )
-    else:
-        text = f"{et}: {p}"
-    return f"TradeMind | {et}\n{text}\ntrace_id={event.trace_id}"
+
+    if et == AuditEventType.LLM_TIMEOUT_RECOVERED.value:
+        return f"✅ LLM đã hoạt động lại (sau {p.get('recovered_after')} lần lỗi liên tiếp)."
+
+    return f"{et}: {p}"
 
 
 async def _get_or_init_state(session: AsyncSession) -> NotifierState:
@@ -164,8 +228,8 @@ def _format_rollup_line(label: str, stats: _WindowStats, *, equity_usdt: Decimal
     # stands now" — same approximation admin_api's /status daily_pnl_pct
     # already makes, not a time-weighted return.
     pct = f" ({stats.pnl_usdt / equity_usdt:.2%})" if equity_usdt else ""
-    win_rate = f", {stats.win_rate_pct:.0f}% win rate" if stats.win_rate_pct is not None else ""
-    return f"{label}: {stats.pnl_usdt:.4f} USDT{pct} | {stats.trade_count} trades{win_rate}"
+    win_rate = f", tỷ lệ thắng {stats.win_rate_pct:.0f}%" if stats.win_rate_pct is not None else ""
+    return f"{label}: {stats.pnl_usdt:.4f} USDT{pct} | {stats.trade_count} lệnh{win_rate}"
 
 
 def _format_trade_line(position: Position) -> str:
@@ -240,10 +304,10 @@ async def _send_daily_pnl_summary(
     equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
 
     lines = [
-        "TradeMind | Daily PnL",
+        "📊 Lãi/lỗ hằng ngày",
         f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
         "",
-        _format_rollup_line("Today", _window_stats(today_positions), equity_usdt=equity_usdt),
+        _format_rollup_line("Hôm nay", _window_stats(today_positions), equity_usdt=equity_usdt),
     ]
     lines.extend(
         _format_trade_line(p)
@@ -251,18 +315,18 @@ async def _send_daily_pnl_summary(
     )
     lines += [
         "",
-        _format_rollup_line("Last 7d", _window_stats(week_positions), equity_usdt=equity_usdt),
+        _format_rollup_line("7 ngày qua", _window_stats(week_positions), equity_usdt=equity_usdt),
         _format_rollup_line(
-            f"Since live ({live_start.date().isoformat()})",
+            f"Từ khi chạy thật ({live_start.date().isoformat()})",
             _window_stats(live_positions),
             equity_usdt=equity_usdt,
         ),
     ]
     if status is not None:
-        killswitch_note = " | KILL SWITCH ON" if status.get("killswitch_enabled") else ""
+        killswitch_note = " | ĐANG BẬT DỪNG KHẨN CẤP" if status.get("killswitch_enabled") else ""
         lines += [
             "",
-            f"Equity: {equity_usdt:.2f} USDT | Open positions: {status['open_positions']}"
+            f"Tài sản: {equity_usdt:.2f} USDT | Vị thế đang mở: {status['open_positions']}"
             f"{killswitch_note}",
         ]
 
@@ -299,19 +363,16 @@ def _describe_window(stats: _WindowStats, *, equity_usdt: Decimal | None) -> str
     what the %-of-equity figure actually means, since an email is read
     stand-alone rather than as one line in a running chat feed."""
     pct = (
-        f" — that's {stats.pnl_usdt / equity_usdt:+.2%} of the current account equity"
+        f" — tương đương {stats.pnl_usdt / equity_usdt:+.2%} tổng tài sản hiện tại"
         if equity_usdt
         else ""
     )
     if stats.trade_count == 0:
-        return f"{stats.pnl_usdt:.4f} USDT (no trades closed in this window)"
+        return f"{stats.pnl_usdt:.4f} USDT (không có lệnh nào đóng trong giai đoạn này)"
     win_rate = f"{stats.win_rate_pct:.0f}%" if stats.win_rate_pct is not None else "—"
-    trades_word = "trade" if stats.trade_count == 1 else "trades"
-    wins_word = "win" if stats.wins == 1 else "wins"
-    losses_word = "loss" if stats.losses == 1 else "losses"
     return (
-        f"{stats.pnl_usdt:.4f} USDT from {stats.trade_count} closed {trades_word} "
-        f"({stats.wins} {wins_word}, {stats.losses} {losses_word}, {win_rate} win rate){pct}"
+        f"{stats.pnl_usdt:.4f} USDT từ {stats.trade_count} lệnh đã đóng "
+        f"({stats.wins} thắng, {stats.losses} thua, tỷ lệ thắng {win_rate}){pct}"
     )
 
 
@@ -349,23 +410,23 @@ def _html_stat_card(
     large: bool,
 ) -> str:
     """One stat tile (This week / Previous week / Since live). `subtitle`
-    spells out in plain English what the window actually covers — the
+    spells out in plain language what the window actually covers — the
     thing a Telegram line has no room for but an email does."""
     color = _pnl_color(stats.pnl_usdt)
     bg, border = _pnl_tint(stats.pnl_usdt)
     arrow = _pnl_arrow(stats.pnl_usdt)
     pct = (
-        f"&nbsp;&nbsp;&middot;&nbsp;&nbsp;{stats.pnl_usdt / equity_usdt:+.2%} of current equity"
+        f"&nbsp;&nbsp;&middot;&nbsp;&nbsp;{stats.pnl_usdt / equity_usdt:+.2%} tổng tài sản hiện tại"
         if equity_usdt
         else ""
     )
     if stats.trade_count == 0:
-        detail = "No trades closed in this window."
+        detail = "Không có lệnh nào đóng trong giai đoạn này."
     else:
         win_rate = f"{stats.win_rate_pct:.0f}%" if stats.win_rate_pct is not None else "&mdash;"
         detail = (
-            f"{stats.trade_count} trade{'s' if stats.trade_count != 1 else ''} closed "
-            f"&mdash; {stats.wins}W / {stats.losses}L ({win_rate} win rate)"
+            f"{stats.trade_count} lệnh đã đóng "
+            f"&mdash; {stats.wins} thắng / {stats.losses} thua (tỷ lệ thắng {win_rate})"
         )
     number_size = "26px" if large else "19px"
     padding = "18px 20px" if large else "14px 16px"
@@ -421,45 +482,45 @@ def _render_weekly_html(
         )
         trades_section = f"""<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:10px;">
 <thead><tr>
-<th align="left" style="{head_cell}">Pair</th>
-<th align="left" style="{head_cell}">Entry &rarr; exit price</th>
-<th align="right" style="{head_cell}">P&amp;L (USDT)</th>
-<th align="right" style="{head_cell}">P&amp;L (%)</th>
+<th align="left" style="{head_cell}">Cặp</th>
+<th align="left" style="{head_cell}">Giá vào &rarr; giá ra</th>
+<th align="right" style="{head_cell}">Lãi/lỗ (USDT)</th>
+<th align="right" style="{head_cell}">Lãi/lỗ (%)</th>
 </tr></thead>
 <tbody>{rows}</tbody>
 </table>"""
     else:
         trades_section = (
             '<p style="font-size:13px;color:#9ca3af;margin:10px 0 0;">'
-            "No trades closed this week.</p>"
+            "Tuần này không có lệnh nào đóng.</p>"
         )
 
     killswitch_row = ""
     if status is not None and status.get("killswitch_enabled"):
         killswitch_row = """<tr><td style="padding:16px 28px 0;">
 <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;font-size:13px;color:#991b1b;font-weight:600;">
-&#9888;&nbsp; Kill switch is currently ON &mdash; no new trades will be opened until it is turned off.
+&#9888;&nbsp; Công tắc dừng khẩn cấp đang BẬT &mdash; sẽ không mở lệnh mới cho đến khi tắt.
 </div>
 </td></tr>"""
 
     account_row = ""
     if equity_usdt is not None and status is not None:
         account_row = f"""<tr><td style="padding:20px 28px 0;">
-<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;margin-bottom:8px;">Account snapshot (right now)</div>
+<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;margin-bottom:8px;">Tình trạng tài khoản (hiện tại)</div>
 <div style="font-size:13px;color:#374151;line-height:1.7;">
-Current equity: <strong>{equity_usdt:.2f} USDT</strong><br>
-Open positions: <strong>{status["open_positions"]}</strong>
+Tổng tài sản hiện tại: <strong>{equity_usdt:.2f} USDT</strong><br>
+Vị thế đang mở: <strong>{status["open_positions"]}</strong>
 </div>
 </td></tr>"""
 
     return f"""<!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
-<title>TradeMind Weekly Summary</title>
+<title>TradeMind - Báo cáo tuần</title>
 </head>
 <body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 12px;">
@@ -467,36 +528,36 @@ Open positions: <strong>{status["open_positions"]}</strong>
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
 <tr><td style="padding:24px 28px 0;">
 <div style="font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#4f46e5;">TradeMind</div>
-<div style="font-size:19px;font-weight:700;color:#111827;margin-top:4px;">Weekly Performance Summary</div>
+<div style="font-size:19px;font-weight:700;color:#111827;margin-top:4px;">Báo cáo hiệu quả giao dịch tuần</div>
 <div style="font-size:13px;color:#6b7280;margin-top:2px;">{window_start.date().isoformat()} &rarr; {window_end.date().isoformat()} (UTC)</div>
 </td></tr>
 <tr><td style="padding:16px 28px 0;">
 <div style="font-size:12px;color:#9ca3af;line-height:1.6;border-top:1px solid #f0f1f3;padding-top:14px;">
-All figures below are <strong>realized</strong> profit/loss &mdash; from trades that already closed
-in each window. Unrealized P&amp;L on positions still open is not included.
+Tất cả số liệu dưới đây là lãi/lỗ <strong>đã chốt</strong> &mdash; từ các lệnh đã đóng
+trong từng giai đoạn. Không tính lãi/lỗ tạm tính của các vị thế còn đang mở.
 </div>
 </td></tr>
 <tr><td style="padding:16px 28px 0;">
-{_html_stat_card("This week", "Realized P&L, last 7 days", week_stats, equity_usdt=equity_usdt, large=True)}
+{_html_stat_card("Tuần này", "Lãi/lỗ đã chốt, 7 ngày qua", week_stats, equity_usdt=equity_usdt, large=True)}
 </td></tr>
 <tr><td style="padding:14px 28px 0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td width="50%" style="padding-right:6px;">
-{_html_stat_card("Previous week", "The 7 days before that", prev_week_stats, equity_usdt=equity_usdt, large=False)}
+{_html_stat_card("Tuần trước", "7 ngày trước đó", prev_week_stats, equity_usdt=equity_usdt, large=False)}
 </td>
 <td width="50%" style="padding-left:6px;">
-{_html_stat_card("Since live", f"Cumulative since {live_start.date().isoformat()}", live_stats, equity_usdt=equity_usdt, large=False)}
+{_html_stat_card("Từ khi chạy thật", f"Lũy kế từ {live_start.date().isoformat()}", live_stats, equity_usdt=equity_usdt, large=False)}
 </td>
 </tr></table>
 </td></tr>
 <tr><td style="padding:20px 28px 0;">
-<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;">Trades closed this week</div>
+<div style="font-size:12px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#6b7280;">Các lệnh đã đóng tuần này</div>
 {trades_section}
 </td></tr>
 {killswitch_row}
 {account_row}
 <tr><td style="padding:20px 28px;">
-<div style="font-size:11px;color:#9ca3af;border-top:1px solid #f0f1f3;padding-top:14px;">Automated weekly report from TradeMind's notifier service.</div>
+<div style="font-size:11px;color:#9ca3af;border-top:1px solid #f0f1f3;padding-top:14px;">Báo cáo tuần tự động từ dịch vụ thông báo của TradeMind.</div>
 </td></tr>
 </table>
 </td></tr>
@@ -541,13 +602,13 @@ async def _send_weekly_pnl_summary(
     equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
 
     lines = [
-        "TradeMind - Weekly Performance Summary",
+        "TradeMind - Báo cáo hiệu quả giao dịch tuần",
         f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
         "",
-        "All figures below are realized profit/loss from trades that closed in each",
-        "window below - unrealized P&L on positions still open is not included.",
+        "Tất cả số liệu dưới đây là lãi/lỗ đã chốt từ các lệnh đã đóng trong từng",
+        "giai đoạn - không tính lãi/lỗ tạm tính của các vị thế còn đang mở.",
         "",
-        f"This week (last 7 days): {_describe_window(week_stats, equity_usdt=equity_usdt)}",
+        f"Tuần này (7 ngày qua): {_describe_window(week_stats, equity_usdt=equity_usdt)}",
     ]
     lines.extend(
         _format_trade_line(p)
@@ -555,22 +616,22 @@ async def _send_weekly_pnl_summary(
     )
     lines += [
         "",
-        "Previous week (the 7 days before that): "
+        "Tuần trước (7 ngày trước đó): "
         f"{_describe_window(prev_week_stats, equity_usdt=equity_usdt)}",
-        f"Since live trading began ({live_start.date().isoformat()}): "
+        f"Từ khi bắt đầu giao dịch thật ({live_start.date().isoformat()}): "
         f"{_describe_window(live_stats, equity_usdt=equity_usdt)}",
     ]
     if status is not None:
         lines += [
             "",
-            f"Current equity: {equity_usdt:.2f} USDT",
-            f"Open positions right now: {status['open_positions']}",
+            f"Tổng tài sản hiện tại: {equity_usdt:.2f} USDT",
+            f"Vị thế đang mở: {status['open_positions']}",
         ]
         if status.get("killswitch_enabled"):
             lines += [
                 "",
-                "WARNING: Kill switch is currently ON - no new trades will be opened "
-                "until it is turned off.",
+                "CẢNH BÁO: Công tắc dừng khẩn cấp đang BẬT - sẽ không mở lệnh mới "
+                "cho đến khi tắt.",
             ]
 
     html_body = _render_weekly_html(
@@ -586,8 +647,8 @@ async def _send_weekly_pnl_summary(
     )
 
     subject = (
-        f"TradeMind Weekly Summary - {window_start.date().isoformat()} "
-        f"to {window_end.date().isoformat()}"
+        f"TradeMind - Báo cáo tuần {window_start.date().isoformat()} "
+        f"đến {window_end.date().isoformat()}"
     )
     await email.send_email(subject, "\n".join(lines), html_body)
 
@@ -661,10 +722,10 @@ async def _handle_telegram_update(
             path, json={"reason": "telegram command", "updated_by": f"telegram:{chat_id}"}
         )
         response.raise_for_status()
-        await telegram.send_message(f"OK: {command} -> {response.json()}")
+        await telegram.send_message(f"Thành công: {command} -> {response.json()}")
     except httpx.HTTPError as exc:
         logger.error("killswitch_command_failed", extra={"command": command, "error": str(exc)})
-        await telegram.send_message(f"Failed to execute {command}: {exc}")
+        await telegram.send_message(f"Không thực hiện được {command}: {exc}")
 
 
 async def _poll_telegram_commands(

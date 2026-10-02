@@ -49,27 +49,27 @@ def test_window_stats_counts_wins_and_losses_and_sums_pnl():
 
 def test_format_rollup_line_includes_pct_of_equity_when_equity_known():
     stats = _WindowStats(pnl_usdt=Decimal("-0.22"), wins=0, losses=1)
-    line = _format_rollup_line("Today", stats, equity_usdt=Decimal("114.78"))
-    assert line == "Today: -0.2200 USDT (-0.19%) | 1 trades, 0% win rate"
+    line = _format_rollup_line("Hôm nay", stats, equity_usdt=Decimal("114.78"))
+    assert line == "Hôm nay: -0.2200 USDT (-0.19%) | 1 lệnh, tỷ lệ thắng 0%"
 
 
 def test_format_rollup_line_omits_pct_when_equity_unknown():
     stats = _WindowStats(pnl_usdt=Decimal("-0.22"), wins=0, losses=1)
-    line = _format_rollup_line("Today", stats, equity_usdt=None)
+    line = _format_rollup_line("Hôm nay", stats, equity_usdt=None)
     assert "%" not in line.split("|")[0]
-    assert line.startswith("Today: -0.2200 USDT | 1 trades")
+    assert line.startswith("Hôm nay: -0.2200 USDT | 1 lệnh")
 
 
 def test_format_rollup_line_zero_equity_does_not_divide_by_zero():
     stats = _WindowStats(pnl_usdt=Decimal("1"), wins=1, losses=0)
-    line = _format_rollup_line("Today", stats, equity_usdt=Decimal("0"))
+    line = _format_rollup_line("Hôm nay", stats, equity_usdt=Decimal("0"))
     assert "%" not in line.split("|")[0]
 
 
 def test_format_rollup_line_omits_win_rate_when_no_trades():
-    line = _format_rollup_line("Today", _WindowStats(Decimal("0"), 0, 0), equity_usdt=None)
-    assert "win rate" not in line
-    assert line == "Today: 0.0000 USDT | 0 trades"
+    line = _format_rollup_line("Hôm nay", _WindowStats(Decimal("0"), 0, 0), equity_usdt=None)
+    assert "tỷ lệ thắng" not in line
+    assert line == "Hôm nay: 0.0000 USDT | 0 lệnh"
 
 
 def test_format_trade_line():
@@ -98,10 +98,10 @@ def test_format_event_llm_timeout_streak():
         payload={"streak": 5, "threshold": 5, "symbol": "ETH/USDT", "reason": "llm_timeout"},
     )
     text = _format_event(event)
-    assert "LLM ANALYSIS STALLED" in text
-    assert "5 consecutive" in text
-    assert "llm_timeout on ETH/USDT" in text
-    assert f"trace_id={trace_id}" in text
+    assert "LLM KHÔNG PHẢN HỒI" in text
+    assert "5 lần liên tiếp" in text
+    assert "llm_timeout, ETH/USDT" in text
+    assert "trace_id" not in text and str(trace_id) not in text
 
 
 def test_format_event_llm_timeout_recovered():
@@ -111,8 +111,54 @@ def test_format_event_llm_timeout_recovered():
         payload={"recovered_after": 7, "symbol": "BTC/USDT"},
     )
     text = _format_event(event)
-    assert "recovered" in text
-    assert "after 7 consecutive failures" in text
+    assert "LLM đã hoạt động lại" in text
+    assert "sau 7 lần lỗi liên tiếp" in text
+
+
+def test_format_event_buy_is_short_and_has_no_trace_id():
+    event = AuditEvent(
+        trace_id=uuid.uuid4(),
+        event_type=AuditEventType.POSITION_OPENED.value,
+        payload={"pair": "BTC/USDT", "entry_price": "50000.00000000", "amount": "0.01000000"},
+    )
+    assert _format_event(event) == (
+        "🟢 MUA BTC/USDT\nGiá: 50000\nSố lượng: 0.01 (≈500.00 USDT)"
+    )
+
+
+def test_format_event_buy_from_reconciliation_omits_missing_fields():
+    event = AuditEvent(
+        trace_id=uuid.uuid4(),
+        event_type=AuditEventType.POSITION_OPENED.value,
+        payload={"pair": "ETH/USDT", "source": "reconciliation"},
+    )
+    assert _format_event(event) == "🟢 MUA ETH/USDT"
+
+
+def test_format_event_sell_with_profit():
+    event = AuditEvent(
+        trace_id=uuid.uuid4(),
+        event_type=AuditEventType.POSITION_CLOSED.value,
+        payload={
+            "pair": "BTC/USDT",
+            "pnl_usdt": "1.5",
+            "exit_reason": "trailing_stop_loss",
+            "r_multiple": "0.75",
+            "fees_usdt": "0.12",
+        },
+    )
+    assert _format_event(event) == (
+        "✅ BÁN BTC/USDT\nLãi: +1.50 USDT (+0.75R)\nLý do: Cắt lỗ đuổi\nPhí: 0.12 USDT"
+    )
+
+
+def test_format_event_sell_with_loss_and_unknown_exit_reason():
+    event = AuditEvent(
+        trace_id=uuid.uuid4(),
+        event_type=AuditEventType.POSITION_CLOSED.value,
+        payload={"pair": "SOL/USDT", "pnl_usdt": "-0.22", "exit_reason": "custom_tag"},
+    )
+    assert _format_event(event) == "🔴 BÁN SOL/USDT\nLỗ: -0.22 USDT\nLý do: custom_tag"
 
 
 def test_next_weekly_run_advances_to_next_matching_weekday():
@@ -141,20 +187,20 @@ def test_describe_window_spells_out_wins_losses_and_pct_of_equity():
     stats = _WindowStats(pnl_usdt=Decimal("-0.22"), wins=0, losses=1)
     text = _describe_window(stats, equity_usdt=Decimal("114.78"))
     assert text == (
-        "-0.2200 USDT from 1 closed trade (0 wins, 1 loss, 0% win rate)"
-        " — that's -0.19% of the current account equity"
+        "-0.2200 USDT từ 1 lệnh đã đóng (0 thắng, 1 thua, tỷ lệ thắng 0%)"
+        " — tương đương -0.19% tổng tài sản hiện tại"
     )
 
 
-def test_describe_window_singular_trade_word_and_no_equity():
+def test_describe_window_no_equity():
     stats = _WindowStats(pnl_usdt=Decimal("3.0"), wins=1, losses=0)
     text = _describe_window(stats, equity_usdt=None)
-    assert text == "3.0000 USDT from 1 closed trade (1 win, 0 losses, 100% win rate)"
+    assert text == "3.0000 USDT từ 1 lệnh đã đóng (1 thắng, 0 thua, tỷ lệ thắng 100%)"
 
 
 def test_describe_window_empty_window():
     text = _describe_window(_WindowStats(Decimal("0"), 0, 0), equity_usdt=Decimal("100"))
-    assert text == "0.0000 USDT (no trades closed in this window)"
+    assert text == "0.0000 USDT (không có lệnh nào đóng trong giai đoạn này)"
 
 
 # --- integration: real Postgres, faked Telegram + admin_api /status -----
@@ -291,14 +337,14 @@ async def test_daily_summary_rolls_up_today_week_and_since_live_separately(
 
     assert len(telegram.sent) == 1
     text = telegram.sent[0]
-    assert "Today: -0.2200 USDT" in text
+    assert "Hôm nay: -0.2200 USDT" in text
     assert "SOL/USDT: 100" in text
-    assert "ETH/USDT" not in text.split("Last 7d")[0]  # not in the today section
-    assert "Last 7d: 2.7800 USDT" in text  # -0.22 + 3.0
-    assert "Since live (" in text
+    assert "ETH/USDT" not in text.split("7 ngày qua")[0]  # not in the today section
+    assert "7 ngày qua: 2.7800 USDT" in text  # -0.22 + 3.0
+    assert "Từ khi chạy thật (" in text
     assert "3.7800 USDT" in text  # -0.22 + 3.0 + 1.0, XRP's 999 excluded
     assert "999" not in text
-    assert "Equity: 114.78 USDT | Open positions: 2" in text
+    assert "Tài sản: 114.78 USDT | Vị thế đang mở: 2" in text
 
 
 async def _fake_status():
@@ -316,8 +362,8 @@ async def test_daily_summary_still_sends_when_status_unavailable(db_session_fact
 
     assert len(telegram.sent) == 1
     text = telegram.sent[0]
-    assert "Today: 0.0000 USDT | 0 trades" in text
-    assert "Equity:" not in text
+    assert "Hôm nay: 0.0000 USDT | 0 lệnh" in text
+    assert "Tài sản:" not in text
 
 
 async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separately(
@@ -371,31 +417,31 @@ async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separa
 
     assert len(email.sent) == 1
     subject, text, html = email.sent[0]
-    assert "TradeMind Weekly Summary" in subject
+    assert "TradeMind - Báo cáo tuần" in subject
 
     # Plain-text body: verbose, self-explanatory per-window descriptions.
     assert (
-        "This week (last 7 days): -0.2200 USDT from 1 closed trade "
-        "(0 wins, 1 loss, 0% win rate)" in text
+        "Tuần này (7 ngày qua): -0.2200 USDT từ 1 lệnh đã đóng "
+        "(0 thắng, 1 thua, tỷ lệ thắng 0%)" in text
     )
-    assert "-0.19% of the current account equity" in text
+    assert "-0.19% tổng tài sản hiện tại" in text
     assert "SOL/USDT: 100" in text
-    assert "ETH/USDT" not in text.split("Previous week")[0]  # not in the this-week section
+    assert "ETH/USDT" not in text.split("Tuần trước")[0]  # not in the this-week section
     assert (
-        "Previous week (the 7 days before that): 3.0000 USDT from 1 closed trade "
-        "(1 win, 0 losses, 100% win rate)" in text
+        "Tuần trước (7 ngày trước đó): 3.0000 USDT từ 1 lệnh đã đóng "
+        "(1 thắng, 0 thua, tỷ lệ thắng 100%)" in text
     )
-    assert "Since live trading began (" in text
+    assert "Từ khi bắt đầu giao dịch thật (" in text
     # -0.22 + 3.0 + 1.0 = 3.78, XRP's 999 excluded (pre-live).
-    assert "3.7800 USDT from 3 closed trades (2 wins, 1 loss, 67% win rate)" in text
+    assert "3.7800 USDT từ 3 lệnh đã đóng (2 thắng, 1 thua, tỷ lệ thắng 67%)" in text
     assert "999" not in text
-    assert "Current equity: 114.78 USDT" in text
-    assert "Open positions right now: 2" in text
+    assert "Tổng tài sản hiện tại: 114.78 USDT" in text
+    assert "Vị thế đang mở: 2" in text
 
     # HTML alternative: same underlying numbers, rendered as stat cards.
     assert html is not None
     assert "SOL/USDT" in html
-    assert "2W / 1L" in html  # since-live tile: 2 wins, 1 loss
+    assert "2 thắng / 1 thua" in html  # since-live tile: 2 wins, 1 loss
     assert "114.78" in html
     assert "999" not in html
 
@@ -411,10 +457,10 @@ async def test_weekly_summary_still_sends_when_status_unavailable(db_session_fac
 
     assert len(email.sent) == 1
     _subject, text, html = email.sent[0]
-    assert "This week (last 7 days): 0.0000 USDT (no trades closed in this window)" in text
-    assert "Current equity:" not in text
+    assert "Tuần này (7 ngày qua): 0.0000 USDT (không có lệnh nào đóng trong giai đoạn này)" in text
+    assert "Tổng tài sản hiện tại:" not in text
     assert html is not None
-    assert "Account snapshot" not in html
+    assert "Tình trạng tài khoản" not in html
 
 
 async def _none_status():

@@ -1,3 +1,5 @@
+import { viLabel } from './labels'
+
 export function money(value: string | number | null, digits = 2): string {
   if (value === null) return '—'
   return new Intl.NumberFormat('en-US', {
@@ -26,8 +28,8 @@ export function rMultiple(value: string | number | null, digits = 2): string {
 }
 
 export function dateTime(value: string | null): string {
-  if (!value) return 'Never'
-  return new Intl.DateTimeFormat(undefined, {
+  if (!value) return 'Chưa có'
+  return new Intl.DateTimeFormat('vi-VN', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -37,9 +39,9 @@ export function dateTime(value: string | null): string {
 }
 
 export function timeAgo(value: string | null): string {
-  if (!value) return 'No cycles yet'
+  if (!value) return 'Chưa có chu kỳ nào'
   const seconds = Math.round((new Date(value).getTime() - Date.now()) / 1000)
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+  const formatter = new Intl.RelativeTimeFormat('vi', { numeric: 'auto' })
   if (Math.abs(seconds) < 60) return formatter.format(seconds, 'second')
   const minutes = Math.round(seconds / 60)
   if (Math.abs(minutes) < 60) return formatter.format(minutes, 'minute')
@@ -62,7 +64,10 @@ export function duration(ms: number): string {
   return `${days}d ${hours % 24}h`
 }
 
+// Vietnamese label for known API codes (see labels.ts), else title-cased.
 export function readable(value: string | null): string {
-  if (!value) return 'None'
+  if (!value) return 'Không có'
+  const label = viLabel(value)
+  if (label) return label
   return value.toLowerCase().replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase())
 }
