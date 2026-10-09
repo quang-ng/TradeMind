@@ -178,6 +178,7 @@ export interface RiskConfig {
   max_open_positions: number
   max_daily_loss_pct: string
   consecutive_loss_limit: number
+  consecutive_loss_cluster_minutes: number
   cooldown_minutes: number
   min_confidence: string
   signal_max_age_minutes: number

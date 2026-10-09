@@ -268,6 +268,7 @@ class RiskConfigOut(BaseModel):
     max_open_positions: int
     max_daily_loss_pct: Decimal
     consecutive_loss_limit: int
+    consecutive_loss_cluster_minutes: int
     cooldown_minutes: int
     min_confidence: Decimal
     signal_max_age_minutes: int
@@ -290,6 +291,7 @@ class RiskConfigPatch(BaseModel):
     max_open_positions: int | None = None
     max_daily_loss_pct: Decimal | None = None
     consecutive_loss_limit: int | None = None
+    consecutive_loss_cluster_minutes: int | None = None
     cooldown_minutes: int | None = None
     min_confidence: Decimal | None = None
     signal_max_age_minutes: int | None = None

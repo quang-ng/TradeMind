@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -113,6 +113,12 @@ class RiskConfig(BaseSettings):
     max_open_positions: int = 2
     max_daily_loss_pct: Decimal = Decimal("0.03")
     consecutive_loss_limit: int = 3
+    # Issue #26: BTC/ETH/SOL/XRP move together, so one market dip can stop
+    # several positions within minutes. Losing positions whose close falls
+    # within this many minutes of the first loss in a cluster count as ONE
+    # loss event toward `consecutive_loss_limit`. 0 counts every losing
+    # position separately (the pre-#26 behaviour).
+    consecutive_loss_cluster_minutes: int = Field(default=60, ge=0)
     cooldown_minutes: int = 120
     # Raised from 0.65: the exit rubric's confidence is deterministic
     # (0.65 + 0.05 per confirmation past 3, capped at 0.80 — see

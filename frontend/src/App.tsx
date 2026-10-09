@@ -1033,6 +1033,7 @@ function RiskPage({ apiKey, data, onUpdated, onRefresh }: { apiKey: string; data
     { key: 'max_stop_loss_pct', label: 'Cắt lỗ tối đa', help: 'Mức cắt lỗ cao nhất cho mọi lệnh', suffix: '%' },
     { key: 'max_open_positions', label: 'Số vị thế mở tối đa', help: 'Tính trên tất cả các cặp' },
     { key: 'consecutive_loss_limit', label: 'Giới hạn thua liên tiếp', help: 'Tạm dừng mua sau số lần thua này' },
+    { key: 'consecutive_loss_cluster_minutes', label: 'Gộp lệnh thua trong', help: 'Số phút: các lệnh thua đóng trong khoảng này tính là một lần thua' },
     { key: 'cooldown_minutes', label: 'Thời gian chờ mỗi cặp', help: 'Số phút sau khi đóng vị thế' },
     { key: 'signal_max_age_minutes', label: 'Tuổi tín hiệu tối đa', help: 'Số phút trước khi tín hiệu bị coi là cũ' },
   ]

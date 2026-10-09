@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from common.account_balance import AccountBalanceSnapshot
@@ -15,10 +15,22 @@ def _count_consecutive_losses(
     closed_positions: Sequence[Position],
     *,
     reset_at: datetime | None,
+    cluster_window: timedelta,
 ) -> tuple[int, datetime | None]:
-    """Count the newest uninterrupted loss streak after operator reset."""
-    consecutive_losses = 0
-    last_loss_closed_at: datetime | None = None
+    """Count the newest uninterrupted loss streak after operator reset, in
+    loss *events* rather than losing positions (issue #26).
+
+    `closed_positions` must be ordered newest close first. The streak is the
+    run of losing positions before the first non-loss or the reset boundary.
+    Walking that streak oldest-first, a loss closed within `cluster_window`
+    of the first loss of the current cluster joins it; otherwise it opens a
+    new cluster. Each cluster is one event, so a single market dip that stops
+    several correlated pairs within minutes counts once, while losses spread
+    across separate dips still accumulate. Anchoring on the cluster's first
+    loss (not the previous loss) keeps a slow bleed of losses from chaining
+    into one endless cluster. A loss without `closed_at` is its own event.
+    """
+    streak_close_times: list[datetime | None] = []
     for position in closed_positions:
         if (
             reset_at is not None
@@ -27,16 +39,30 @@ def _count_consecutive_losses(
         ):
             break
         if position.pnl_usdt is not None and position.pnl_usdt < 0:
-            consecutive_losses += 1
-            if last_loss_closed_at is None:
-                last_loss_closed_at = position.closed_at
+            streak_close_times.append(position.closed_at)
         else:
             break
-    return consecutive_losses, last_loss_closed_at
+
+    loss_events = 0
+    cluster_start: datetime | None = None
+    for closed_at in reversed(streak_close_times):
+        if (
+            closed_at is None
+            or cluster_start is None
+            or closed_at - cluster_start > cluster_window
+        ):
+            loss_events += 1
+            cluster_start = closed_at
+
+    last_loss_closed_at = streak_close_times[0] if streak_close_times else None
+    return loss_events, last_loss_closed_at
 
 
 async def load_account_state(
-    session: AsyncSession, *, balance: AccountBalanceSnapshot
+    session: AsyncSession,
+    *,
+    balance: AccountBalanceSnapshot,
+    loss_cluster_window: timedelta,
 ) -> AccountState:
     """Builds the Section 9.1/9.2 account-state inputs from Postgres.
 
@@ -85,6 +111,7 @@ async def load_account_state(
     consecutive_losses, last_loss_closed_at = _count_consecutive_losses(
         closed_positions,
         reset_at=consecutive_loss_reset_at,
+        cluster_window=loss_cluster_window,
     )
 
     equity_usdt = balance.equity_usdt

@@ -734,6 +734,7 @@ non-negative USDT stake row. There is no configured-equity fallback.
   "max_open_positions": 2,
   "max_daily_loss_pct": 0.03,
   "consecutive_loss_limit": 3,
+  "consecutive_loss_cluster_minutes": 60,
   "cooldown_minutes": 120,
   "min_confidence": 0.70,
   "signal_max_age_minutes": 65,
@@ -758,7 +759,7 @@ non-negative USDT stake row. There is no configured-equity fallback.
 | 7 | Max open positions | `max_open_positions = 2` | Reject with `MAX_POSITIONS_REACHED` if the pair already has an open position, or total open positions ≥ limit |
 | 8 | Max total exposure | `max_total_exposure_pct = 20%` | Reject with `MAX_EXPOSURE_REACHED` if adding this position would exceed the cap |
 | 9 | Max daily loss (circuit breaker) | `max_daily_loss_pct = 3%` | If realized+unrealized daily PnL ≤ `-3%` of equity, **auto-enable the global kill switch** (`SYSTEM` actor) and reject with `DAILY_LOSS_LIMIT_HIT` |
-| 10 | Consecutive losses | `consecutive_loss_limit = 3` | After 3 consecutive losing closed positions since the last explicit operator reset, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. Disabling the kill switch records a reset boundary without deleting or modifying position history; only losses closed after that boundary form the next streak |
+| 10 | Consecutive losses | `consecutive_loss_limit = 3`, `consecutive_loss_cluster_minutes = 60` | After 3 consecutive loss **events** since the last explicit operator reset, auto-enable the persistent global kill switch; reject with the backward-compatible `CONSECUTIVE_LOSS_PAUSE` code. The streak is the newest run of losing closed positions (any pair) uninterrupted by a non-losing close; walking it oldest-first, losses closed within `consecutive_loss_cluster_minutes` of the first loss of a cluster form **one** event, so a single market dip that stops several correlated pairs counts once (issue #26). Clusters are anchored on their first loss, not chained loss-to-loss, so a slow bleed still accumulates events; `0` counts every losing position separately. Disabling the kill switch records a reset boundary without deleting or modifying position history; only losses closed after that boundary form the next streak |
 | 11 | Per-pair cooldown | `cooldown_minutes = 120` | Reject with `COOLDOWN_ACTIVE` if a position on this pair closed within the cooldown window |
 | 12 | Insufficient balance | Freqtrade-reported free balance | Reject with `INSUFFICIENT_BALANCE` if computed size exceeds available funds |
 | 13 | Stop-loss required | every approved entry carries a stop | No conditional — stop-loss price is always computed and attached (Section 9.2); this is not a rejection rule, it's an invariant of approval |

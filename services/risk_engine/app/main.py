@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import redis.asyncio as redis
@@ -68,7 +68,11 @@ async def process_signal(
     is_duplicate = not await redis_client.set(
         dup_key, "1", nx=True, ex=redis_keys.DECISION_IDEMPOTENCY_TTL_SECONDS
     )
-    account = await load_account_state(session, balance=balance)
+    account = await load_account_state(
+        session,
+        balance=balance,
+        loss_cluster_window=timedelta(minutes=config.consecutive_loss_cluster_minutes),
+    )
     signal_view = SignalView(
         id=str(signal_row.id),
         symbol=signal_row.symbol,
