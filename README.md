@@ -482,6 +482,7 @@ Production
 
 ## Documentation
 
+* **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** — Plain-language walkthrough with diagrams, in Vietnamese (TradeMind vận hành thế nào)
 * **[PROJECT.md](PROJECT.md)** — Architecture, system contracts, risk rules and requirements
 * **[DEPLOYMENT.md](DEPLOYMENT.md)** — Deployment and operations
 * **[AGENTS.md](AGENTS.md)** — Development guidance for coding agents
