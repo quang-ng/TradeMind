@@ -628,3 +628,66 @@ async def test_negative_expectancy_setup_is_rejected_once_filter_is_enabled(
         check = audit.payload["expectancy_check"]
         assert check["decision"] == "NEGATIVE_EXPECTANCY"
         assert check["enforced"] is True
+
+
+async def test_simultaneous_losses_count_as_one_event_for_consecutive_loss_rule(
+    db_session_factory,
+):
+    # Issue #26: three correlated losses closed together are one market
+    # event, so the default 60-minute cluster window keeps the streak at 1
+    # (below consecutive_loss_limit=3) and the entry is approved.
+    await _seed_losing_history(db_session_factory, regime="trend_following", score=75, n=3)
+    signal_id = await _seed_signal(db_session_factory, symbol="BTC/USDT", action=Action.BUY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        return httpx.Response(
+            200, json={"trade_id": 1, "status": "ok", "enter_tag": body["entry_tag"]}
+        )
+
+    async with db_session_factory() as session:
+        await process_signal(
+            session, FakeRedis(), str(signal_id), RiskConfig(), _mock_freqtrade(handler)
+        )
+
+    async with db_session_factory() as session:
+        decision = (
+            await session.execute(select(RiskDecision).where(RiskDecision.signal_id == signal_id))
+        ).scalar_one()
+        assert decision.approved is True
+        killswitch = (
+            await session.execute(text("SELECT killswitch_enabled FROM system_state"))
+        ).scalar_one()
+        assert killswitch is False
+
+
+async def test_unclustered_losses_still_trip_consecutive_loss_kill_switch(
+    db_session_factory,
+):
+    # Same history with clustering disabled reproduces the pre-#26 count of
+    # three separate losses: the rule rejects and auto-trips the kill switch.
+    await _seed_losing_history(db_session_factory, regime="trend_following", score=75, n=3)
+    signal_id = await _seed_signal(db_session_factory, symbol="BTC/USDT", action=Action.BUY)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no order should be submitted for a rejected entry")
+
+    async with db_session_factory() as session:
+        await process_signal(
+            session,
+            FakeRedis(),
+            str(signal_id),
+            RiskConfig(consecutive_loss_cluster_minutes=0),
+            _mock_freqtrade(handler),
+        )
+
+    async with db_session_factory() as session:
+        decision = (
+            await session.execute(select(RiskDecision).where(RiskDecision.signal_id == signal_id))
+        ).scalar_one()
+        assert decision.approved is False
+        assert decision.rejection_reason == "CONSECUTIVE_LOSS_PAUSE"
+        killswitch = (
+            await session.execute(text("SELECT killswitch_enabled FROM system_state"))
+        ).scalar_one()
+        assert killswitch is True
