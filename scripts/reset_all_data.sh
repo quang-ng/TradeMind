@@ -67,11 +67,12 @@ for volume in "${data_volumes[@]}"; do
     fi
 done
 
-# A freshly-created named volume is mounted root:root by default. Freqtrade's
-# container always runs as the non-root `ftuser` (freqtrade/Dockerfile pins
-# USER ftuser, no runtime privilege drop to fix ownership itself), so without
-# this step the very first boot after a reset fails with sqlite3
-# "unable to open database file" and crash-loops on the healthcheck.
+# Freqtrade's container always runs as the non-root `ftuser`. A root-owned
+# /freqtrade/db makes the first boot fail with sqlite3 "unable to open
+# database file" and crash-loop on the healthcheck. freqtrade/Dockerfile now
+# ships /freqtrade/db owned by ftuser, so Docker seeds a fresh volume with the
+# right ownership on its own; this explicit chown stays as a safety net (e.g.
+# a volume created by an older image).
 echo "Pre-creating trademind_freqtrade_data with ftuser ownership..."
 docker volume create trademind_freqtrade_data >/dev/null
 # Use the Compose service so the command always uses the deployment's actual
