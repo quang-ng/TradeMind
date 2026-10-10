@@ -96,6 +96,33 @@ def test_trailing_stop_locks_in_more_than_the_atr_floor():
     assert trade.exit_price > Decimal("97.0")
 
 
+def test_trailing_level_raised_by_the_same_candle_fills_at_that_level():
+    """Issue #9 regression: the candle opens at entry (no trail yet), runs
+    to +5% and drops back through 105*0.985. The open never gapped through
+    anything, so the fill is the trailing level, not the open."""
+    ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=100.0)
+    candle = _candle(o=100.0, h=105.0, low=99.0, c=99.5)
+
+    trade = ledger.check_static_exit("BTC/USDT", candle, ENTRY_TIME + timedelta(hours=1))
+
+    assert trade is not None
+    assert trade.exit_reason == "trailing_stop"
+    assert trade.exit_price == Decimal("103.425")
+
+
+def test_open_below_the_existing_trail_fills_at_the_open():
+    ledger = _ledger_with_position(entry_price=100.0, stop_loss_price=97.0, peak_price=105.0)
+    # Trail already at 103.425 from the earlier 105 peak; this candle opens
+    # below it — a genuine gap-through.
+    candle = _candle(o=102.0, h=102.5, low=101.0, c=101.5)
+
+    trade = ledger.check_static_exit("BTC/USDT", candle, ENTRY_TIME + timedelta(hours=2))
+
+    assert trade is not None
+    assert trade.exit_reason == "trailing_stop"
+    assert trade.exit_price == Decimal("102.0")
+
+
 def test_r_multiple_is_pnl_over_actual_risk_on_close():
     """Positive-expectancy plan M4: `ClosedTrade.r_multiple` uses the same
     `pnl_usdt / actual_risk_usdt` definition the live path persists on

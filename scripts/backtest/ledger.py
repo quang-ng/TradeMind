@@ -55,6 +55,19 @@ TRAILING_ACTIVATION_PCT = Decimal("0.02")
 TRAILING_DISTANCE_PCT = Decimal("0.015")
 
 
+@dataclass(frozen=True)
+class ExitProfile:
+    """The freqtrade-side exit knobs `check_static_exit` applies. Defaults to
+    the module constants above (what is live today); a replay of *past*
+    signals can pass the profile that was actually deployed at that time
+    instead — e.g. issue #9's study of signals spanning the 2026-08-31 →
+    2026-09-08 "let winners run" window."""
+
+    minimal_roi: dict[int, Decimal] = field(default_factory=lambda: dict(MINIMAL_ROI))
+    trailing_activation_pct: Decimal = TRAILING_ACTIVATION_PCT
+    trailing_distance_pct: Decimal = TRAILING_DISTANCE_PCT
+
+
 @dataclass
 class SimPosition:
     symbol: str
@@ -119,6 +132,7 @@ class Ledger:
     # from that operational circuit breaker; the real system still has the
     # breaker; this flag only removes it from the replay's arithmetic.
     ignore_killswitch: bool = False
+    exit_profile: ExitProfile = field(default_factory=ExitProfile)
 
     positions: dict[str, SimPosition] = field(default_factory=dict)
     closed_trades: list[ClosedTrade] = field(default_factory=list)
@@ -198,6 +212,24 @@ class Ledger:
         del self.positions[position.symbol]
         return trade
 
+    def _effective_stop(self, position: SimPosition) -> tuple[Decimal, str]:
+        """ATR stop raised to the trailing level once profit-at-peak clears
+        the activation bar — `custom_stoploss()` for the current
+        `position.peak_price`."""
+        # Defensive floor mirroring custom_stoploss()'s own fallback: never
+        # let the effective stop be looser than the strategy-wide static
+        # bound, even if stop_loss_price were ever wider than expected.
+        stop_price = max(
+            position.stop_loss_price, position.entry_price * (1 + STATIC_STOPLOSS_PCT)
+        )
+        profile = self.exit_profile
+        peak_profit_pct = (position.peak_price - position.entry_price) / position.entry_price
+        if peak_profit_pct >= profile.trailing_activation_pct:
+            trailing_price = position.peak_price * (1 - profile.trailing_distance_pct)
+            if trailing_price > stop_price:
+                return trailing_price, "trailing_stop"
+        return stop_price, "atr_stoploss"
+
     def check_static_exit(
         self, symbol: str, candle: dict, candle_close_time: datetime
     ) -> ClosedTrade | None:
@@ -229,31 +261,26 @@ class Ledger:
         high = Decimal(str(candle["h"]))
         open_ = Decimal(str(candle["o"]))
 
+        # The stop already in force when this candle opened (previous
+        # peak) — the only level the open can have gapped through.
+        stop_at_open, _ = self._effective_stop(position)
         position.peak_price = max(position.peak_price, high)
-        peak_profit_pct = (position.peak_price - position.entry_price) / position.entry_price
-
-        # Defensive floor mirroring custom_stoploss()'s own fallback: never
-        # let the effective stop be looser than the strategy-wide static
-        # bound, even if stop_loss_price were ever wider than expected.
-        stop_price = max(
-            position.stop_loss_price, position.entry_price * (1 + STATIC_STOPLOSS_PCT)
-        )
-        exit_reason = "atr_stoploss"
-        if peak_profit_pct >= TRAILING_ACTIVATION_PCT:
-            trailing_price = position.peak_price * (1 - TRAILING_DISTANCE_PCT)
-            if trailing_price > stop_price:
-                stop_price = trailing_price
-                exit_reason = "trailing_stop"
+        stop_price, exit_reason = self._effective_stop(position)
 
         if low <= stop_price:
-            fill = min(open_, stop_price) if open_ < stop_price else stop_price
+            # Gap-through only when the open was already below the stop that
+            # existed at the open. A trailing level raised by *this* candle's
+            # own high was reached after the open, so it fills at that level
+            # (2026-10-10, issue #9: filling those at the open booked ~186
+            # replayed trailing exits at entry price instead of ~+1.5%).
+            fill = open_ if open_ < stop_at_open else stop_price
             return self._record_close(position, candle_close_time, fill, exit_reason)
 
         elapsed_minutes = (candle_close_time - position.entry_time).total_seconds() / 60
         roi_threshold = next(
             (
-                MINIMAL_ROI[mark]
-                for mark in sorted(MINIMAL_ROI, reverse=True)
+                self.exit_profile.minimal_roi[mark]
+                for mark in sorted(self.exit_profile.minimal_roi, reverse=True)
                 if elapsed_minutes >= mark
             ),
             None,
