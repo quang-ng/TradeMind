@@ -1,0 +1,65 @@
+name: Deploy
+
+# Continuous deployment to the production VPS. Runs only after CI passes on
+# main (or when started by hand), and only ever executes scripts/deploy.sh on
+# the VPS — the SSH key is pinned to that script by a forced command in the
+# VPS's authorized_keys, so this workflow cannot run anything else there.
+#
+# Required secrets on the `production` environment:
+#   VPS_HOST         — VPS IP / hostname
+#   VPS_SSH_KEY      — private half of the deploy-only key
+#   VPS_KNOWN_HOSTS  — output of `ssh-keyscan <VPS_HOST>`, pins the host key
+#
+# VPS side: the public half goes in /root/.ssh/authorized_keys as
+#   restrict,command="/root/TradeMind/scripts/deploy.sh" ssh-ed25519 AAAA... github-actions-deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deploys at once, and never cancel one half-way through a
+# `docker compose up`.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # workflow_run fires on every CI completion; only deploy green pushes to main.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Run scripts/deploy.sh on the VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -T -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            "root@${VPS_HOST}"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
