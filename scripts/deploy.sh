@@ -27,5 +27,8 @@ docker compose "${compose_files[@]}" config --quiet
 docker compose "${compose_files[@]}" up -d --build --wait --wait-timeout 300
 
 echo
+"${repo_dir}/scripts/healthcheck.sh"
+
+echo
 echo "Deployed revision: $(git rev-parse --short HEAD)"
 docker compose "${compose_files[@]}" ps
