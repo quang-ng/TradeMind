@@ -106,7 +106,9 @@ non-evaluation use.
 3. Pull the reviewed release.
 4. Run lint and tests.
 5. Build images and run `docker compose up -d` using both Compose files.
-6. Verify every container is healthy and `migrate` exited with code zero.
+6. Verify every container is healthy and `migrate` exited with code zero
+   (`scripts/healthcheck.sh` checks this, plus a 60s crash-loop soak and the
+   loopback HTTP endpoints; `scripts/deploy.sh` runs it automatically).
 7. Verify `/status`, logs, and one manually triggered cycle per pair.
 8. Review the resulting trace IDs in the operator console, then disable the
    kill switch only after the signal, risk-decision, and order timelines are
