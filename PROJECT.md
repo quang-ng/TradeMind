@@ -302,7 +302,13 @@ trademind/
 │   ├── notifier/
 │   │   ├── app/
 │   │   │   ├── main.py            # subscribes to audit events, sends Telegram
-│   │   │   └── telegram_client.py
+│   │   │   ├── telegram_client.py
+│   │   │   ├── public_report.py   # allowlisted weekly aggregates + Markdown, no account data
+│   │   │   ├── private_report.py  # internal snapshot and closed-trade journal
+│   │   │   ├── private_report_client.py # private-only Git destination verification
+│   │   │   ├── archive_worker.py  # both archives; optional archive-only entrypoint
+│   │   │   ├── report_charts.py   # deterministic public PNG charts
+│   │   │   └── wiki_client.py     # optional GitHub Wiki Git publisher
 │   │   ├── Dockerfile
 │   │   └── tests/
 │   └── common/
@@ -348,6 +354,7 @@ trademind/
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | notifier | Outbound notifications |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `EMAIL_FROM` / `EMAIL_TO` | notifier | Weekly business-performance summary email (blank `SMTP_HOST`/`EMAIL_TO` = disabled, no-op) |
 | `WEEKLY_PNL_REPORT_WEEKDAY_UTC` / `WEEKLY_PNL_REPORT_HOUR_UTC` | notifier | UTC weekday/hour the weekly summary email is sent at (default Monday 08:00) |
+| `PRIVATE_REPORT_REPOSITORY` / `PRIVATE_REPORT_TOKEN` | notifier only | Optional private GitHub repository and write credential; verify private visibility before every publication; blank disables |
 | `ADMIN_API_KEY` | admin_api | Auth for the admin API |
 | `FREQTRADE_API_URL` / `FREQTRADE_API_USER` / `FREQTRADE_API_PASS` | risk_engine | Internal-network-only Freqtrade REST credentials |
 | `DRY_RUN` | freqtrade, risk_engine | Must be `true` for MVP; flipping requires human review (Section 14) |
@@ -906,6 +913,61 @@ Redis holds nothing that is not reconstructable or re-derivable; it is coordinat
 ---
 
 ## 11. API Overview
+
+**Weekly operations archive (Administration Zone, Phase 4 extension).**
+Public Wiki publication has been retired at the operator's request. Only the private
+repository and weekly email remain active. Both use the typed aggregate report
+(counts, P&L, comparisons and operational events) and deterministic charts; the
+private report additionally includes account history and the trade journal below.
+The archive loop ignores legacy Wiki settings, Compose supplies blank Wiki
+credentials/destination, and the `weekly-wiki` manual command is removed.
+PostgreSQL remains the audit system of record. No archive failure can affect trading.
+
+**Private weekly archive.** `private_report.py` adds a typed closed-trade journal
+(symbol, entry/exit prices, realized P&L, close time and actual dry-run/live mode)
+and an optional typed Admin `/status` snapshot (equity, open-position count,
+kill-switch state, mode). Snapshot time is explicitly labeled as observation time,
+never as historical week-end state. If status is unavailable, the report says
+unverified; database failure prevents publication. Neither archive includes secrets,
+raw audit payloads, model text or arbitrary exception messages. Both begin with a
+deterministic historical assessment, week-over-week comparison and investigation
+suggestions; none of these suggestions triggers a control or trading operation.
+
+`PrivateReportClient` checks the exact GitHub repository identity and private
+visibility before preparing a commit and again before pushing. Unknown/public
+visibility fails closed. Reports and charts are committed to the normal repository
+with a `REPORTS.md` index. Repository administrators must keep this repository
+private; the publication-time check cannot prevent a later human visibility change.
+The public sink accepts only the public model, never the private snapshot/journal.
+
+**Weekly email and equity history.** Email shares `render_private_report` with the
+private archive, including assessment, current-state snapshot, investigation tasks
+and journal, and retains the previous since-start cumulative P&L section. HTML
+escapes all text and embeds PNG charts as MIME related parts referenced by CID;
+no external images or public balance/chart hosting is required. Plain-text fallback
+is always included. `WEEKLY_EMAIL_ARCHIVE_REPOSITORY` optionally adds a GitHub
+archive link without enabling another publisher. SMTP settings/recipients/schedule
+remain unchanged; transport errors never include server messages or credentials
+in logs. Archive and email delivery remain independent.
+
+The private report and email include a 12-period equity chart. Each period uses
+the last non-null `PerformanceSnapshot.starting_equity_usdt` actually recorded
+within that period `(end - 7 days, end]`, with its `computed_at` displayed. Despite
+the legacy field name, the scheduler populates this field from the fresh Risk Engine
+account-equity snapshot at compute time; it is not inferred from cumulative P&L.
+Missing periods remain gaps. This is sampled account value, not exact week-end
+balance or investment return (deposits/withdrawals can also change it). Neither the
+equity history nor its PNG is passed to the public Wiki publisher.
+
+`archive_worker.archive_loop` tracks delivery to the private repository
+on the existing weekly schedule (Monday 08:00 UTC by default), with hourly retry.
+It runs inside notifier, or as an archive-only instance of the same notifier image
+(`python -m app.archive_worker`) when notification deployment is managed separately.
+Only one private archive loop should be enabled. This optional Administration Zone worker
+has only the existing read-side PostgreSQL/Admin API dependencies plus GitHub;
+no Redis, exchange/Freqtrade, Telegram or SMTP credentials are required. GitHub
+failure cannot affect execution or notifications. Enabling an archive-only instance
+does not alter any trading settings or live/dry-run mode.
 
 Single-operator, self-hosted deployment: authentication is a static API key (`ADMIN_API_KEY`) passed as a bearer token. Not designed for multi-tenant use. The default deployment is intended to sit behind a VPN/reverse-proxy with TLS if exposed beyond localhost. `docker-compose.public.yml` is an explicit, dry-run-evaluation-only exception that publishes the frontend on public TCP port 3000 while leaving every backend service private; because it uses plain HTTP, it is not appropriate for live funds or long-term operation.
 

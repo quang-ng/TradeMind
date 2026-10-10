@@ -5,6 +5,8 @@ from email.message import EmailMessage
 
 from common.config import NotifierSettings
 
+from .report_email import CHART_CID, EQUITY_CID
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,7 +21,8 @@ class EmailClient:
     "show original"/reply-quote view) fall back to; `html_body` is an
     optional richer alternative built entirely from our own numeric/date
     fields (never raw LLM `reasoning`, unlike why Telegram stays plain
-    text) — see `_render_weekly_html` in `main.py`.
+    text). Weekly HTML is rendered from the private report by `report_email.py`;
+    overview/equity PNGs are embedded as related MIME parts, never fetched remotely.
 
     `smtplib` is blocking, so the actual send runs in a thread
     (`asyncio.to_thread`) to avoid stalling the notifier's event loop —
@@ -30,7 +33,14 @@ class EmailClient:
     def __init__(self, settings: NotifierSettings | None = None) -> None:
         self._settings = settings or NotifierSettings()
 
-    def _send_sync(self, subject: str, text_body: str, html_body: str | None) -> None:
+    def _send_sync(
+        self,
+        subject: str,
+        text_body: str,
+        html_body: str | None,
+        chart_png: bytes | None = None,
+        equity_png: bytes | None = None,
+    ) -> None:
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self._settings.email_from or self._settings.smtp_username
@@ -40,6 +50,19 @@ class EmailClient:
             # Produces a multipart/alternative message; mail clients pick
             # whichever part they can render best, preferring HTML.
             message.add_alternative(html_body, subtype="html")
+            for content, cid, name in (
+                (chart_png, CHART_CID, "weekly-charts.png"),
+                (equity_png, EQUITY_CID, "equity-history.png"),
+            ):
+                if content is not None:
+                    message.get_payload()[-1].add_related(
+                        content,
+                        maintype="image",
+                        subtype="png",
+                        cid=f"<{cid}>",
+                        disposition="inline",
+                        filename=name,
+                    )
 
         with smtplib.SMTP(self._settings.smtp_host, self._settings.smtp_port, timeout=15.0) as smtp:
             smtp.starttls()
@@ -47,7 +70,15 @@ class EmailClient:
                 smtp.login(self._settings.smtp_username, self._settings.smtp_password)
             smtp.send_message(message)
 
-    async def send_email(self, subject: str, text_body: str, html_body: str | None = None) -> bool:
+    async def send_email(
+        self,
+        subject: str,
+        text_body: str,
+        html_body: str | None = None,
+        *,
+        chart_png: bytes | None = None,
+        equity_png: bytes | None = None,
+    ) -> bool:
         if not self._settings.smtp_host or not self._settings.email_to:
             # Same "never blocks or delays" posture as Telegram (PROJECT.md
             # Section 9.4): an unconfigured mailer is a no-op, not a crash,
@@ -57,8 +88,10 @@ class EmailClient:
             logger.warning("email_not_configured", extra={"subject": subject})
             return False
         try:
-            await asyncio.to_thread(self._send_sync, subject, text_body, html_body)
+            await asyncio.to_thread(
+                self._send_sync, subject, text_body, html_body, chart_png, equity_png
+            )
             return True
-        except (smtplib.SMTPException, OSError) as exc:
-            logger.warning("email_send_failed", extra={"error": str(exc), "subject": subject})
+        except (smtplib.SMTPException, OSError):
+            logger.warning("email_send_failed", extra={"subject": subject})
             return False

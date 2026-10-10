@@ -15,7 +15,10 @@ from common.logging import configure_json_logging
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from .archive_worker import archive_loop
 from .email_client import EmailClient
+from .private_report import build_private_report
+from .report_email import render_report_email
 from .telegram_client import TelegramClient
 
 configure_json_logging()
@@ -572,85 +575,28 @@ async def _send_weekly_pnl_summary(
     settings: NotifierSettings,
     window_end: datetime,
 ) -> None:
-    """Weekly companion to `_send_daily_pnl_summary`, sent by email instead
-    of Telegram. Rolls up the trailing 7d (the week just finished) against
-    the 7d before that for a week-over-week trend, plus the same
-    since-go-live cumulative context the daily summary already computes —
-    same rationale: a single week's realized PnL still isn't much signal at
-    this trade frequency without something to compare it against.
-
-    Unlike the terse Telegram daily summary, this is read stand-alone in an
-    inbox, so both the plain-text body and the HTML alternative spell out
-    what each number means (win/loss counts, %-of-equity, which window is
-    which) instead of packing it into one compact line."""
-    window_start = window_end - timedelta(days=7)
-    prev_window_start = window_start - timedelta(days=7)
+    """Same assessment, snapshot, charts and journal as the private weekly archive."""
+    report = await build_private_report(session_factory, settings, window_end)
     live_start = datetime.fromisoformat(settings.live_trading_started_at)
-
     async with session_factory() as session:
-        week_positions = await _closed_positions_since(session, start=window_start, end=window_end)
-        prev_week_positions = await _closed_positions_since(
-            session, start=prev_window_start, end=window_start
-        )
-        live_positions = await _closed_positions_since(session, start=live_start, end=window_end)
-
-    week_stats = _window_stats(week_positions)
-    prev_week_stats = _window_stats(prev_week_positions)
-    live_stats = _window_stats(live_positions)
-
-    status = await _fetch_status(settings)
-    equity_usdt = Decimal(str(status["equity_usdt"])) if status else None
-
-    lines = [
-        "TradeMind - Báo cáo hiệu quả giao dịch tuần",
-        f"{window_start.date().isoformat()} -> {window_end.date().isoformat()} (UTC)",
-        "",
-        "Tất cả số liệu dưới đây là lãi/lỗ đã chốt từ các lệnh đã đóng trong từng",
-        "giai đoạn - không tính lãi/lỗ tạm tính của các vị thế còn đang mở.",
-        "",
-        f"Tuần này (7 ngày qua): {_describe_window(week_stats, equity_usdt=equity_usdt)}",
-    ]
-    lines.extend(
-        _format_trade_line(p)
-        for p in sorted(week_positions, key=lambda p: p.closed_at or window_start)
-    )
-    lines += [
-        "",
-        "Tuần trước (7 ngày trước đó): "
-        f"{_describe_window(prev_week_stats, equity_usdt=equity_usdt)}",
+        positions = await _closed_positions_since(session, start=live_start, end=window_end)
+    equity = report.account.equity_usdt if report.account else None
+    cumulative = (
         f"Từ khi bắt đầu giao dịch thật ({live_start.date().isoformat()}): "
-        f"{_describe_window(live_stats, equity_usdt=equity_usdt)}",
-    ]
-    if status is not None:
-        lines += [
-            "",
-            f"Tổng tài sản hiện tại: {equity_usdt:.2f} USDT",
-            f"Vị thế đang mở: {status['open_positions']}",
-        ]
-        if status.get("killswitch_enabled"):
-            lines += [
-                "",
-                "CẢNH BÁO: Công tắc dừng khẩn cấp đang BẬT - sẽ không mở lệnh mới "
-                "cho đến khi tắt.",
-            ]
-
-    html_body = _render_weekly_html(
-        window_start=window_start,
-        window_end=window_end,
-        week_stats=week_stats,
-        week_positions=week_positions,
-        prev_week_stats=prev_week_stats,
-        live_stats=live_stats,
-        live_start=live_start,
-        equity_usdt=equity_usdt,
-        status=status,
+        f"{_describe_window(_window_stats(positions), equity_usdt=equity)}"
     )
-
-    subject = (
-        f"TradeMind - Báo cáo tuần {window_start.date().isoformat()} "
-        f"đến {window_end.date().isoformat()}"
+    content = await asyncio.to_thread(
+        render_report_email, report, cumulative_note=cumulative,
+        archive_repository=settings.weekly_email_archive_repository,
     )
-    await email.send_email(subject, "\n".join(lines), html_body)
+    start = window_end - timedelta(days=7)
+    subject = f"TradeMind - Báo cáo tuần {start.date()} đến {window_end.date()}"
+    sent = await email.send_email(
+        subject, content.text, content.html, chart_png=content.chart_png, equity_png=content.equity_png,
+    )
+    logger.info("weekly_report_email_result", extra={
+        "window_end": window_end.isoformat(), "sent": sent,
+    })
 
 
 def _next_weekly_run(now: datetime, *, weekday: int, hour: int) -> datetime:
@@ -784,6 +730,7 @@ async def run_notifier() -> None:
             ),
             _daily_pnl_summary_loop(session_factory, telegram, settings),
             _weekly_pnl_summary_loop(session_factory, email, settings),
+            archive_loop(session_factory, settings),
         )
     finally:
         await telegram.aclose()

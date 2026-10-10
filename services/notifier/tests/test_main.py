@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 from common.config import NotifierSettings
 from common.db.models import AuditEvent, Order, Position, RiskDecision, Signal
@@ -19,6 +20,7 @@ from notifier.app.main import (
     _window_stats,
     _WindowStats,
 )
+from notifier.app.private_report import AccountSnapshot
 
 NOW = datetime(2026, 8, 11, 0, 0, tzinfo=timezone.utc)
 
@@ -281,7 +283,11 @@ class _FakeEmail:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str, str | None]] = []
 
-    async def send_email(self, subject: str, text_body: str, html_body: str | None = None) -> bool:
+    async def send_email(
+        self, subject: str, text_body: str, html_body: str | None = None,
+        *, chart_png: bytes | None = None, equity_png: bytes | None = None,
+    ) -> bool:
+        assert chart_png and equity_png
         self.sent.append((subject, text_body, html_body))
         return True
 
@@ -409,8 +415,11 @@ async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separa
     email = _FakeEmail()
     settings = NotifierSettings(live_trading_started_at=live_start.isoformat())
     monkeypatch.setattr(
-        "notifier.app.main._fetch_status",
-        lambda _settings: _fake_status(),
+        "notifier.app.private_report.fetch_account_snapshot",
+        AsyncMock(return_value=AccountSnapshot(
+            equity_usdt=Decimal("114.78"), open_positions=2,
+            killswitch_enabled=False, dry_run=True,
+        )),
     )
 
     await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
@@ -419,48 +428,41 @@ async def test_weekly_summary_rolls_up_this_week_prev_week_and_since_live_separa
     subject, text, html = email.sent[0]
     assert "TradeMind - Báo cáo tuần" in subject
 
-    # Plain-text body: verbose, self-explanatory per-window descriptions.
-    assert (
-        "Tuần này (7 ngày qua): -0.2200 USDT từ 1 lệnh đã đóng "
-        "(0 thắng, 1 thua, tỷ lệ thắng 0%)" in text
-    )
-    assert "-0.19% tổng tài sản hiện tại" in text
-    assert "SOL/USDT: 100" in text
-    assert "ETH/USDT" not in text.split("Tuần trước")[0]  # not in the this-week section
-    assert (
-        "Tuần trước (7 ngày trước đó): 3.0000 USDT từ 1 lệnh đã đóng "
-        "(1 thắng, 0 thua, tỷ lệ thắng 100%)" in text
-    )
+    # User-requested private-report layout replaces the old email wording;
+    # preserve window/cumulative checks and assert both inline chart references.
+    assert "Lãi/lỗ đã chốt (USDT) | -0.2200 | +3.0000" in text
+    assert "| SOL/USDT | 100" in text
+    assert "| ETH/USDT |" not in text
     assert "Từ khi bắt đầu giao dịch thật (" in text
-    # -0.22 + 3.0 + 1.0 = 3.78, XRP's 999 excluded (pre-live).
     assert "3.7800 USDT từ 3 lệnh đã đóng (2 thắng, 1 thua, tỷ lệ thắng 67%)" in text
     assert "999" not in text
-    assert "Tổng tài sản hiện tại: 114.78 USDT" in text
-    assert "Vị thế đang mở: 2" in text
-
-    # HTML alternative: same underlying numbers, rendered as stat cards.
+    assert "Tổng tài sản hiện tại: **114.7800 USDT**" in text
+    assert "Vị thế đang mở: **2**" in text
     assert html is not None
-    assert "SOL/USDT" in html
-    assert "2 thắng / 1 thua" in html  # since-live tile: 2 wins, 1 loss
-    assert "114.78" in html
+    assert "SOL/USDT" in html and "114.7800" in html
+    assert "2 thắng, 1 thua" in html
     assert "999" not in html
+    assert "cid:trademind-weekly-charts" in html
+    assert "cid:trademind-equity-chart" in html
+    assert "Việc cần kiểm tra" in html
 
 
 async def test_weekly_summary_still_sends_when_status_unavailable(db_session_factory, monkeypatch):
     email = _FakeEmail()
     settings = NotifierSettings(live_trading_started_at=(NOW - timedelta(days=7)).isoformat())
     monkeypatch.setattr(
-        "notifier.app.main._fetch_status", lambda _settings: _none_status()
+        "notifier.app.private_report.fetch_account_snapshot", AsyncMock(return_value=None)
     )
 
     await _send_weekly_pnl_summary(db_session_factory, email, settings, NOW)
 
     assert len(email.sent) == 1
     _subject, text, html = email.sent[0]
-    assert "Tuần này (7 ngày qua): 0.0000 USDT (không có lệnh nào đóng trong giai đoạn này)" in text
+    assert "CHƯA ĐỦ DỮ LIỆU" in text
+    assert "CHƯA XÁC MINH" in text
     assert "Tổng tài sản hiện tại:" not in text
     assert html is not None
-    assert "Tình trạng tài khoản" not in html
+    assert "CHƯA XÁC MINH" in html
 
 
 async def _none_status():

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -308,5 +308,19 @@ class NotifierSettings(BaseSettings):
     email_from: str = ""
     email_to: str = ""
     # weekday 0=Monday .. 6=Sunday (Python's `date.weekday()` convention).
-    weekly_pnl_report_weekday_utc: int = 0
-    weekly_pnl_report_hour_utc: int = 8
+    weekly_pnl_report_weekday_utc: int = Field(default=0, ge=0, le=6)
+    weekly_pnl_report_hour_utc: int = Field(default=8, ge=0, le=23)
+    # Optional public aggregate archive; this token belongs only to notifier.
+    wiki_report_repository: str = Field(
+        default="", pattern=r"^(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$"
+    )
+    wiki_report_token: SecretStr = SecretStr("")
+
+    private_report_repository: str = Field(
+        default="", pattern=r"^(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$"
+    )
+    private_report_token: SecretStr = SecretStr("")
+
+    weekly_email_archive_repository: str = Field(
+        default="", pattern=r"^(?:[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$"
+    )

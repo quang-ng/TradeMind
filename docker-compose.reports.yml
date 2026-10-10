@@ -1,0 +1,37 @@
+# Standalone Administration Zone archive worker; use a dedicated mode-0600 env file.
+# Do not also enable report destinations in the regular notifier instance.
+services:
+  report_archiver:
+    image: trademind-reports:local
+    build:
+      context: .
+      dockerfile: services/notifier/Dockerfile
+    command: ["python", "-m", "app.archive_worker"]
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN:?Report database DSN required}
+      ADMIN_API_URL: ${ADMIN_API_URL:-http://admin_api:8000}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Admin API credential required}
+      WIKI_REPORT_REPOSITORY: ""  # Public Wiki publication retired
+      WIKI_REPORT_TOKEN: ""
+      PRIVATE_REPORT_REPOSITORY: ${PRIVATE_REPORT_REPOSITORY:-}
+      PRIVATE_REPORT_TOKEN: ${PRIVATE_REPORT_TOKEN:-}
+      WEEKLY_PNL_REPORT_WEEKDAY_UTC: ${WEEKLY_PNL_REPORT_WEEKDAY_UTC:-0}
+      WEEKLY_PNL_REPORT_HOUR_UTC: ${WEEKLY_PNL_REPORT_HOUR_UTC:-8}
+      MPLCONFIGDIR: /tmp/matplotlib
+    networks: [core_net]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+networks:
+  core_net:
+    external: true
+    name: trademind_core_net
